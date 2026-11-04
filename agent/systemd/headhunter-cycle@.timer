@@ -1,0 +1,10 @@
+[Unit]
+Description=Run headhunter cycle every 4 hours (08:00-24:00)
+
+[Timer]
+OnCalendar=*-*-* 08,12,16,20,00:15
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

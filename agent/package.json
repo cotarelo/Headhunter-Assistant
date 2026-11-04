@@ -1,0 +1,19 @@
+{
+  "name": "headhunter-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "24x7 wrapper around career-ops: scan -> evaluate (agy) -> email alerts",
+  "type": "module",
+  "engines": { "node": ">=22.13.0" },
+  "scripts": {
+    "notify": "node notify.mjs",
+    "notify:dry": "node notify.mjs --dry-run",
+    "notify:test": "node notify.mjs --test",
+    "digest": "node notify.mjs --digest"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "js-yaml": "^4.1.0",
+    "nodemailer": "^6.9.16"
+  }
+}

@@ -1,0 +1,17 @@
+[Unit]
+Description=Headhunter agent cycle (career-ops scan -> evaluate -> email alerts)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=%i
+WorkingDirectory=/home/%i/Headhunter-Assistant/agent
+ExecStart=/home/%i/Headhunter-Assistant/agent/run-cycle.sh
+Environment=PATH=/home/%i/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/%i
+Nice=10
+# 4 GB box: keep the agent from starving the system
+MemoryHigh=2500M
+MemoryMax=3200M
+TimeoutStartSec=2h

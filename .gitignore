@@ -1,0 +1,10 @@
+# Personal data and third-party checkout — never commit
+career-ops/
+old/
+career-ops.zip
+*.pdf
+*.docx
+agent/.env
+agent/logs/
+agent/node_modules/
+.DS_Store

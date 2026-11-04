@@ -1,0 +1,18 @@
+[Unit]
+Description=HeadHunter Assistant Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/Headhunter-Assistant/agent
+ExecStart=/usr/bin/env node /home/%i/Headhunter-Assistant/agent/bot.mjs
+Environment=PATH=/home/%i/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/%i
+Restart=always
+RestartSec=15
+MemoryMax=300M
+
+[Install]
+WantedBy=multi-user.target

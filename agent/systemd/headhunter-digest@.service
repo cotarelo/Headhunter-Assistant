@@ -1,0 +1,11 @@
+[Unit]
+Description=Headhunter daily digest email (heartbeat)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=%i
+WorkingDirectory=/home/%i/Headhunter-Assistant/agent
+ExecStart=/usr/bin/env node /home/%i/Headhunter-Assistant/agent/notify.mjs --digest
+Environment=PATH=/home/%i/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/%i

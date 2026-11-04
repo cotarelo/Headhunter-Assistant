@@ -1,0 +1,36 @@
+{
+  "_note": "command(*) allowed with dangerous-command denies; write_file rules cannot be path-scoped in agy (tested 2026-10-28) -> protected user files are guarded by run-cycle.sh snapshot+restore.",
+  "permissions": {
+    "allow": [
+      "command(*)",
+      "read_url(*)",
+      "write_file(*)"
+    ],
+    "deny": [
+      "command(sudo)",
+      "command(su)",
+      "command(rm -rf)",
+      "command(rm -r)",
+      "command(curl)",
+      "command(wget)",
+      "command(ssh)",
+      "command(scp)",
+      "command(rsync)",
+      "command(git push)",
+      "command(git commit)",
+      "command(git reset)",
+      "command(git checkout)",
+      "command(npm install)",
+      "command(npm i)",
+      "command(chmod)",
+      "command(chown)",
+      "command(crontab)",
+      "command(systemctl)",
+      "command(docker)",
+      "command(kill)",
+      "command(pkill)",
+      "command(shutdown)",
+      "command(reboot)"
+    ]
+  }
+}
