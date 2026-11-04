@@ -73,6 +73,13 @@ async function handle(msg) {
   }
   if (cfg.chatId !== chatId) { log('ignored message from foreign chat', chatId); return; }
 
+  const replyText = msg.reply_to_message?.text || msg.reply_to_message?.caption || '';
+  const matchReport = replyText.match(/Carta de presentación.*?#(\d+)/i) || replyText.match(/informe\s+#?(\d+)/i);
+  if (matchReport && text && !text.startsWith('/')) {
+    const n = matchReport[1];
+    return rewriteCover(n, text, chatId);
+  }
+
   switch (cmd) {
     case '/estado': {
       const pend = pendingLines().length;
@@ -97,6 +104,15 @@ async function handle(msg) {
       const r = spawnSync('node', ['set-status.mjs', '--report', n, 'Applied', '--note', 'Enviada por Jorge (confirmado en Telegram)'], { cwd: ROOT, encoding: 'utf8' });
       return tgSend(cfg.token, chatId, r.status === 0 ? `✅ Informe #${n} marcado como Applied.` : `No pude actualizar el tracker: ${esc((r.stderr || r.stdout).slice(0, 300))}`);
     }
+    case '/carta': {
+      const parts = text.split(/\s+/);
+      const n = parts[1];
+      const instructions = parts.slice(2).join(' ').trim();
+      if (!/^\d+$/.test(n || '') || !instructions) {
+        return tgSend(cfg.token, chatId, 'Uso: <code>/carta &lt;informe&gt; &lt;cambios&gt;</code>\nEjemplo: <code>/carta 104 hazla más corta y resalta Kafka</code>');
+      }
+      return rewriteCover(n, instructions, chatId);
+    }
     case '/ayuda':
     default:
       return tgSend(cfg.token, chatId, [
@@ -104,11 +120,74 @@ async function handle(msg) {
         '/estado — último ciclo y cola',
         '/top — mejores ofertas (7 días)',
         '/cola — próximas ofertas por evaluar',
+        '/carta N &lt;cambios&gt; — pedir a agy que modifique la carta',
         '/enviada N — marcar como Applied la candidatura del informe N',
         '',
-        'Las ofertas con nota ≥ 4.0 te llegan aquí y por email. Nunca aplico sin tu ✅.',
+        'Las ofertas con nota ≥ 3.8 te llegan aquí con su carta y formulario.',
       ].join('\n'));
   }
+}
+
+function reportFile(num) {
+  const f = fs.readdirSync(path.join(ROOT, 'reports')).find((x) => x.startsWith(String(num).padStart(3, '0') + '-') && !/RESERVED/.test(x));
+  if (!f) throw new Error(`report ${num} not found`);
+  return path.join(ROOT, 'reports', f);
+}
+
+async function rewriteCover(report, instructions, chatId) {
+  const appDirectory = appDir(report);
+  const coverFile = path.join(appDirectory, 'cover.txt');
+  let currentCover = '';
+  try { currentCover = fs.readFileSync(coverFile, 'utf8'); } catch {}
+  let meta = {};
+  try { meta = parseReport(reportFile(report)); } catch { meta = { company: `Empresa #${report}`, role: '' }; }
+
+  await tgSend(cfg.token, chatId, `✍️ Reescribiendo carta de presentación para #${report} (${esc(meta.company)})...\nInstrucción: <i>${esc(instructions)}</i>`);
+
+  const prompt = `You are updating the cover letter for job application report ${report} (${meta.company} - ${meta.role}).
+Inputs:
+- Current cover letter in output/applications/${String(report).padStart(3, '0')}/cover.txt:
+"""${currentCover}"""
+- User revision request:
+"""${instructions}"""
+- Profile / facts: cv.md, config/profile.yml, modes/_profile.md.
+
+Task:
+Rewrite output/applications/${String(report).padStart(3, '0')}/cover.txt applying the user's revision request.
+Rules:
+1. 120-180 words, professional English, high impact.
+2. Facts strictly from cv.md only. Never invent facts.
+3. Write ONLY the text of the new cover letter to output/applications/${String(report).padStart(3, '0')}/cover.txt using your write tool.
+End with: cover_ready=true`;
+
+  const r = spawnSync(process.env.AGY_BIN || 'agy', ['-p', prompt], {
+    cwd: ROOT, encoding: 'utf8', timeout: 300000,
+  });
+
+  if (r.status !== 0 || !fs.existsSync(coverFile)) {
+    return tgSend(cfg.token, chatId, `⚠️ Error al reescribir con agy: ${esc((r.stderr || r.stdout || '').slice(0, 300))}`);
+  }
+
+  const newCover = fs.readFileSync(coverFile, 'utf8').trim();
+
+  // Re-run form fill in background to update form-filled.png if needed
+  spawnSync('node', ['prepare.mjs', '--report', String(report), '--skip-agy', '--no-telegram'], { cwd: HERE, encoding: 'utf8' });
+
+  return tgSend(cfg.token, chatId, [
+    `✉️ <b>Carta de presentación actualizada — #${report} (${esc(meta.company)})</b>`,
+    '',
+    `<blockquote>${esc(newCover)}</blockquote>`,
+    '',
+    `<i>💡 Si quieres más cambios, vuelve a responder. Si te parece bien:</i>`
+  ].join('\n'), {
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '✏️ Más cambios', callback_data: `edit_cover:${report}` },
+        { text: '📝 La envío yo', callback_data: `manual:${report}` },
+        { text: '❌ Descartar', callback_data: `discard:${report}` }
+      ]]
+    }
+  });
 }
 
 function appDir(report) { return path.join(ROOT, 'output', 'applications', String(report).padStart(3, '0')); }
@@ -126,6 +205,9 @@ async function handleCallback(cb) {
   if (!cfg.chatId || chatId !== cfg.chatId) { log('ignored callback from foreign chat', chatId); return; }
   const [action, report] = String(cb.data || '').split(':');
   if (!/^\d+$/.test(report || '')) return;
+  if (action === 'edit_cover') {
+    return tgSend(cfg.token, chatId, `✍️ Para modificar la carta del informe #${report}, responde directamente al mensaje de la carta con tus cambios, o escribe:\n<code>/carta ${report} &lt;lo que quieras cambiar&gt;</code>`);
+  }
   if (action === 'manual') {
     setAppState(report, 'manual_pending');
     return tgSend(cfg.token, chatId, `👍 Informe #${report}: la envías tú. Cuando la hayas enviado escribe <code>/enviada ${report}</code> y la marco como Applied.`);

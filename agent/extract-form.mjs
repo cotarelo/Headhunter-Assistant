@@ -30,15 +30,7 @@ export async function extractForm({ report, url, out }) {
   out = out || path.join(ROOT, 'output', 'applications', String(report || 'adhoc'));
   ensureDir(out);
   const target = applicationUrl(url);
-  let formUrl = target.url;
-  if (target.ats === 'greenhouse' && !formUrl && target.ghJid) {
-    if (/elastic\.co/i.test(url)) {
-      formUrl = `https://jobs.elastic.co/form?gh_jid=${target.ghJid}`;
-    } else {
-      const slug = (process.env.GH_SLUG || meta.company || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-      formUrl = `https://job-boards.greenhouse.io/${slug}/jobs/${target.ghJid}`;
-    }
-  }
+  let formUrl = target.url || url;
   const { browser, page } = await openForm(ROOT, formUrl);
   try {
     let targetFrame = page.mainFrame();
@@ -46,12 +38,12 @@ export async function extractForm({ report, url, out }) {
     if (count === 0) {
       const applyHref = await page.evaluate((jid) => {
         const links = [...document.querySelectorAll('a')];
-        const match = links.find((a) => (jid && a.href && a.href.includes(jid) && /(apply|form)/i.test(a.href)) || /(apply for this position|apply now)/i.test(a.innerText));
+        const match = links.find((a) => (jid && a.href && a.href.includes(jid) && /(apply|form)/i.test(a.href)) || /(apply for this position|apply now|apply)/i.test(a.innerText));
         return match ? match.href : null;
       }, target.ghJid);
       if (applyHref && applyHref !== page.url()) {
         await page.goto(applyHref, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        await page.waitForTimeout(4000);
+        await page.waitForTimeout(5000);
       }
       const sub = page.frames().find((f) => f !== page.mainFrame() && /(job_app|greenhouse|ashby|lever)/i.test(f.url()));
       if (sub) targetFrame = sub;

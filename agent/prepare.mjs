@@ -56,7 +56,12 @@ End with one line: answers_ready=<true|false>.`;
 }
 
 async function fillForm(form, answers, out) {
-  const { browser, page } = await openForm(ROOT, form.form_url);
+  const initialUrl = (form.posting_url && form.posting_url !== form.form_url) ? form.posting_url : form.form_url;
+  const { browser, page } = await openForm(ROOT, initialUrl);
+  if (initialUrl !== form.form_url) {
+    await page.goto(form.form_url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForTimeout(4000);
+  }
   const result = { filled: [], skipped: [], errors: [] };
   try {
     const frame = form.frame_url
@@ -141,9 +146,28 @@ async function main() {
   log('4/4 telegram');
   await tgSendFile(tg.token, tg.chatId, path.join(out, 'form-filled.png'), { caption: `${meta.company} — ${meta.role}: formulario rellenado (sin enviar)`, kind: 'document' });
   if (answers.cv_pdf && fs.existsSync(path.join(ROOT, answers.cv_pdf))) await tgSendFile(tg.token, tg.chatId, path.join(ROOT, answers.cv_pdf), { caption: 'CV adaptado' });
-  if (fs.existsSync(path.join(out, 'cover.txt'))) await tgSendFile(tg.token, tg.chatId, path.join(out, 'cover.txt'), { caption: 'Carta de presentación' });
+  
+  if (fs.existsSync(path.join(out, 'cover.txt'))) {
+    const coverText = fs.readFileSync(path.join(out, 'cover.txt'), 'utf8').trim();
+    if (coverText) {
+      await tgSend(tg.token, tg.chatId, [
+        `✉️ <b>Carta de presentación — #${report} (${esc(meta.company)})</b>`,
+        '',
+        `<blockquote>${esc(coverText)}</blockquote>`,
+        '',
+        `<i>💡 Para modificarla, responde directamente a este mensaje con tus cambios (ej: "hazla más corta" o "enfatiza X").</i>`
+      ].join('\n'));
+    }
+  }
+
   await tgSend(tg.token, tg.chatId, summaryText(meta, answers, fill, report), {
-    reply_markup: { inline_keyboard: [[{ text: '📝 La envío yo', callback_data: `manual:${report}` }, { text: '❌ Descartar', callback_data: `discard:${report}` }]] },
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '✏️ Cambiar carta', callback_data: `edit_cover:${report}` },
+        { text: '📝 La envío yo', callback_data: `manual:${report}` },
+        { text: '❌ Descartar', callback_data: `discard:${report}` }
+      ]]
+    },
   });
 }
 
