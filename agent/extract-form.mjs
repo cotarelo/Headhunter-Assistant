@@ -34,11 +34,13 @@ export async function extractForm({ report, url, out }) {
   const { browser, page } = await openForm(ROOT, formUrl);
   try {
     let targetFrame = page.mainFrame();
-    let count = await targetFrame.evaluate(() => document.querySelectorAll('input, select, textarea').length);
-    if (count === 0) {
+    const hasFileInput = await page.evaluate(() => document.querySelectorAll('input[type="file"]').length > 0);
+    if (!hasFileInput) {
       const applyHref = await page.evaluate((jid) => {
         const links = [...document.querySelectorAll('a')];
-        const match = links.find((a) => (jid && a.href && a.href.includes(jid) && /(apply|form)/i.test(a.href)) || /(apply for this position|apply now|apply)/i.test(a.innerText));
+        let match = links.find((a) => jid && a.href && a.href.includes(jid) && /(apply|form)/i.test(a.href));
+        if (!match) match = links.find((a) => a.href && /(apply|form)\b/i.test(a.href) && !a.href.includes('#'));
+        if (!match) match = links.find((a) => a.href && !a.href.endsWith('#') && !a.href.endsWith('#/') && /(apply for this position|apply now)/i.test(a.innerText));
         return match ? match.href : null;
       }, target.ghJid);
       if (applyHref && applyHref !== page.url()) {
