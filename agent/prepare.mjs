@@ -150,7 +150,11 @@ async function main() {
   if (has('--no-telegram') || !tg.enabled) { log('4/4 telegram skipped'); return; }
   log('4/4 telegram');
   await tgSendFile(tg.token, tg.chatId, path.join(out, 'form-filled.png'), { caption: `${meta.company} — ${meta.role}: formulario rellenado (sin enviar)`, kind: 'document' });
-  if (answers.cv_pdf && fs.existsSync(path.join(ROOT, answers.cv_pdf))) await tgSendFile(tg.token, tg.chatId, path.join(ROOT, answers.cv_pdf), { caption: 'CV adaptado' });
+  if (answers.cv_pdf && fs.existsSync(path.join(ROOT, answers.cv_pdf))) {
+    await tgSendFile(tg.token, tg.chatId, path.join(ROOT, answers.cv_pdf), {
+      caption: `📄 <b>CV adaptado — #${report} (${esc(meta.company)})</b>\n\n<i>💡 Para modificar el CV, responde directamente a este archivo con tus cambios (ej: "enfoca más a SRE" o "resalta el proyecto de cloud en King").</i>`,
+    });
+  }
   
   if (fs.existsSync(path.join(out, 'cover.txt'))) {
     const coverText = fs.readFileSync(path.join(out, 'cover.txt'), 'utf8').trim();
@@ -167,11 +171,16 @@ async function main() {
 
   await tgSend(tg.token, tg.chatId, summaryText(meta, answers, fill, report), {
     reply_markup: {
-      inline_keyboard: [[
-        { text: '✏️ Cambiar carta', callback_data: `edit_cover:${report}` },
-        { text: '📝 La envío yo', callback_data: `manual:${report}` },
-        { text: '❌ Descartar', callback_data: `discard:${report}` }
-      ]]
+      inline_keyboard: [
+        [
+          { text: '✏️ Cambiar carta', callback_data: `edit_cover:${report}` },
+          { text: '📄 Cambiar CV', callback_data: `edit_cv:${report}` },
+        ],
+        [
+          { text: '📝 La envío yo', callback_data: `manual:${report}` },
+          { text: '❌ Descartar', callback_data: `discard:${report}` },
+        ]
+      ]
     },
   });
 }

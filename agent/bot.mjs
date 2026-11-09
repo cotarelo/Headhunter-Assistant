@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
-import { tgConfig, tgCall, tgSend, esc } from './lib/telegram.mjs';
+import { tgConfig, tgCall, tgSend, tgSendFile, esc } from './lib/telegram.mjs';
 import { parseReport } from './notify.mjs';
 import { spawnSync } from 'node:child_process';
 
@@ -74,10 +74,32 @@ async function handle(msg) {
   if (cfg.chatId !== chatId) { log('ignored message from foreign chat', chatId); return; }
 
   const replyText = msg.reply_to_message?.text || msg.reply_to_message?.caption || '';
-  const matchReport = replyText.match(/Carta de presentación.*?#(\d+)/i) || replyText.match(/informe\s+#?(\d+)/i);
-  if (matchReport && text && !text.startsWith('/')) {
-    const n = matchReport[1];
-    return rewriteCover(n, text, chatId);
+  const matchCv = replyText.match(/CV (?:adaptado|actualizado).*?#(\d+)/i) || replyText.match(/\bcv\b.*?#(\d+)/i);
+  const matchCover = replyText.match(/Carta de presentación.*?#(\d+)/i);
+  const matchSummary = replyText.match(/informe\s+#?(\d+)/i);
+
+  if (text && !text.startsWith('/')) {
+    if (matchCv) {
+      const n = matchCv[1];
+      if (/\b(carta|cover)\b/i.test(text) && !/\b(cv|curriculum|currículum)\b/i.test(text)) {
+        return rewriteCover(n, text, chatId);
+      }
+      return rewriteCv(n, text, chatId);
+    }
+    if (matchCover) {
+      const n = matchCover[1];
+      if (/\b(cv|curriculum|currículum)\b/i.test(text) && !/\b(carta|cover)\b/i.test(text)) {
+        return rewriteCv(n, text, chatId);
+      }
+      return rewriteCover(n, text, chatId);
+    }
+    if (matchSummary) {
+      const n = matchSummary[1];
+      if (/\b(cv|curriculum|currículum|resumen|experiencia|educacion|educación)\b/i.test(text)) {
+        return rewriteCv(n, text, chatId);
+      }
+      return rewriteCover(n, text, chatId);
+    }
   }
 
   switch (cmd) {
@@ -113,6 +135,15 @@ async function handle(msg) {
       }
       return rewriteCover(n, instructions, chatId);
     }
+    case '/cv': {
+      const parts = text.split(/\s+/);
+      const n = parts[1];
+      const instructions = parts.slice(2).join(' ').trim();
+      if (!/^\d+$/.test(n || '') || !instructions) {
+        return tgSend(cfg.token, chatId, 'Uso: <code>/cv &lt;informe&gt; &lt;cambios&gt;</code>\nEjemplo: <code>/cv 104 enfoca más a SRE y destaca Kubernetes</code>');
+      }
+      return rewriteCv(n, instructions, chatId);
+    }
     case '/ayuda':
     default:
       return tgSend(cfg.token, chatId, [
@@ -121,8 +152,10 @@ async function handle(msg) {
         '/top — mejores ofertas (7 días)',
         '/cola — próximas ofertas por evaluar',
         '/carta N &lt;cambios&gt; — pedir a agy que modifique la carta',
+        '/cv N &lt;cambios&gt; — pedir a agy que modifique el CV',
         '/enviada N — marcar como Applied la candidatura del informe N',
         '',
+        '💡 También puedes responder directamente a cualquier mensaje de carta o archivo de CV con los cambios que quieras.',
         'Las ofertas con nota ≥ 3.8 te llegan aquí con su carta y formulario.',
       ].join('\n'));
   }
@@ -183,11 +216,148 @@ End with: cover_ready=true`;
     `<i>💡 Si quieres más cambios, vuelve a responder. Si te parece bien:</i>`
   ].join('\n'), {
     reply_markup: {
-      inline_keyboard: [[
-        { text: '✏️ Más cambios', callback_data: `edit_cover:${report}` },
-        { text: '📝 La envío yo', callback_data: `manual:${report}` },
-        { text: '❌ Descartar', callback_data: `discard:${report}` }
-      ]]
+      inline_keyboard: [
+        [
+          { text: '✏️ Más cambios carta', callback_data: `edit_cover:${report}` },
+          { text: '📄 Cambiar CV', callback_data: `edit_cv:${report}` },
+        ],
+        [
+          { text: '📝 La envío yo', callback_data: `manual:${report}` },
+          { text: '❌ Descartar', callback_data: `discard:${report}` }
+        ]
+      ]
+    }
+  });
+}
+
+async function rewriteCv(report, instructions, chatId) {
+  const repNum = String(report).padStart(3, '0');
+  const appDirectory = appDir(report);
+  const answersFile = path.join(appDirectory, 'answers.json');
+  let currentCv = '';
+  let answersData = null;
+  if (fs.existsSync(answersFile)) {
+    try {
+      answersData = JSON.parse(fs.readFileSync(answersFile, 'utf8'));
+      if (answersData.cv_pdf) currentCv = answersData.cv_pdf;
+    } catch {}
+  }
+  let meta = {};
+  let repPath = '';
+  try {
+    repPath = reportFile(report);
+    meta = parseReport(repPath);
+  } catch {
+    meta = { company: `Empresa #${report}`, role: '' };
+  }
+
+  await tgSend(cfg.token, chatId, `✍️ Adaptando CV para #${report} (${esc(meta.company)})...\nInstrucción: <i>${esc(instructions)}</i>`);
+
+  const today = new Date().toISOString().slice(0, 10);
+  const prompt = `You are adapting/updating the tailored CV for job application report ${report} (${meta.company} - ${meta.role}).
+Inputs:
+- Job report: ${repPath ? path.relative(ROOT, repPath) : `reports/${repNum}-*.md`}
+- Current CV PDF: ${currentCv || 'none'}
+- User revision request:
+"""${instructions}"""
+- Profile / facts: cv.md, config/profile.yml, modes/_profile.md, modes/_custom.md.
+
+Task:
+Re-tailor the CV for this application, applying the user's revision request.
+Rules:
+1. Strictly max 2 pages A4.
+2. Facts strictly from cv.md only. Never invent facts or metrics.
+3. Candidate contact email must be jorge.penacotarelo@gmail.com.
+4. Follow modes/_custom.md: omit the Core Competencies section entirely (leave competencies empty/absent in the payload; do not render blue competency blocks), and under Earlier Roles do not output a role title or location.
+5. Generate the tailored HTML using build-cv-html.mjs and render the PDF using generate-pdf.mjs with --report=${report} --format=a4.
+   Write the output PDF to output/cv-jorge-pena-cotarelo-${report}-${meta.company.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${today}.pdf (or similar path under output/).
+6. Update ${path.relative(ROOT, answersFile)}: set "cv_pdf" to the path of the new PDF relative to career-ops root.
+End with: cv_ready=true`;
+
+  const agyArgs = ['-p', prompt];
+  if (process.env.AGY_MODEL) agyArgs.push('--model', process.env.AGY_MODEL);
+  const r = spawnSync(process.env.AGY_BIN || 'agy', agyArgs, {
+    cwd: ROOT, encoding: 'utf8', timeout: Number(process.env.AGY_TIMEOUT_SECONDS || 3600) * 1000,
+  });
+
+  // Re-read answers.json to find the updated cv_pdf
+  let newPdfRel = '';
+  if (fs.existsSync(answersFile)) {
+    try {
+      const updatedAnswers = JSON.parse(fs.readFileSync(answersFile, 'utf8'));
+      if (updatedAnswers.cv_pdf && fs.existsSync(path.join(ROOT, updatedAnswers.cv_pdf))) {
+        newPdfRel = updatedAnswers.cv_pdf;
+      }
+    } catch {}
+  }
+
+  // Fallback: check pdf-index.tsv or output/ directory
+  if (!newPdfRel) {
+    try {
+      const idx = fs.readFileSync(path.join(ROOT, 'data', 'pdf-index.tsv'), 'utf8');
+      const lines = idx.trim().split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const parts = lines[i].split('\t');
+        if (parts[0] === repNum || parts[0] === String(report)) {
+          if (parts[1] && fs.existsSync(path.join(ROOT, parts[1]))) {
+            newPdfRel = parts[1];
+            break;
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // If still not found, check output/ for any cv matching this report
+  if (!newPdfRel) {
+    try {
+      const outFiles = fs.readdirSync(path.join(ROOT, 'output'));
+      const matching = outFiles.filter((f) => f.includes(`-${report}-`) && f.endsWith('.pdf'))
+        .map((f) => ({ name: f, mtime: fs.statSync(path.join(ROOT, 'output', f)).mtimeMs }))
+        .sort((a, b) => b.mtime - a.mtime);
+      if (matching.length > 0) {
+        newPdfRel = path.join('output', matching[0].name);
+      }
+    } catch {}
+  }
+
+  if (r.status !== 0 || !newPdfRel) {
+    return tgSend(cfg.token, chatId, `⚠️ Error al adaptar el CV con agy: ${esc((r.stderr || r.stdout || '').slice(0, 300))}`);
+  }
+
+  // Make sure answers.json has the updated cv_pdf
+  if (fs.existsSync(answersFile)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(answersFile, 'utf8'));
+      if (data.cv_pdf !== newPdfRel) {
+        data.cv_pdf = newPdfRel;
+        fs.writeFileSync(answersFile, JSON.stringify(data, null, 2));
+      }
+    } catch {}
+  }
+
+  const absPdf = path.join(ROOT, newPdfRel);
+
+  // Send the new PDF to Telegram
+  await tgSendFile(cfg.token, chatId, absPdf, {
+    caption: `📄 <b>CV actualizado — #${report} (${esc(meta.company)})</b>\n\n<i>💡 Para más cambios, responde directamente a este archivo o escribe /cv ${report} &lt;cambios&gt;.</i>`,
+  });
+
+  // Re-run form fill in background to update form-filled.png with the new CV file attached
+  spawnSync('node', ['prepare.mjs', '--report', String(report), '--skip-agy', '--no-telegram'], { cwd: HERE, encoding: 'utf8' });
+
+  return tgSend(cfg.token, chatId, `✅ CV para #${report} (${esc(meta.company)}) actualizado y adjuntado al formulario.`, {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '📄 Más cambios CV', callback_data: `edit_cv:${report}` },
+          { text: '✏️ Cambiar carta', callback_data: `edit_cover:${report}` },
+        ],
+        [
+          { text: '📝 La envío yo', callback_data: `manual:${report}` },
+          { text: '❌ Descartar', callback_data: `discard:${report}` },
+        ]
+      ]
     }
   });
 }
@@ -209,6 +379,9 @@ async function handleCallback(cb) {
   if (!/^\d+$/.test(report || '')) return;
   if (action === 'edit_cover') {
     return tgSend(cfg.token, chatId, `✍️ Para modificar la carta del informe #${report}, responde directamente al mensaje de la carta con tus cambios, o escribe:\n<code>/carta ${report} &lt;lo que quieras cambiar&gt;</code>`);
+  }
+  if (action === 'edit_cv') {
+    return tgSend(cfg.token, chatId, `📄 Para modificar el CV del informe #${report}, responde directamente al archivo del CV con tus cambios, o escribe:\n<code>/cv ${report} &lt;lo que quieras cambiar&gt;</code>`);
   }
   if (action === 'manual') {
     setAppState(report, 'manual_pending');
