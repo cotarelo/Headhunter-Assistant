@@ -76,32 +76,34 @@ async function handle(msg) {
   if (cfg.chatId !== chatId) { log('ignored message from foreign chat', chatId); return; }
 
   const replyText = msg.reply_to_message?.text || msg.reply_to_message?.caption || '';
-  const matchCv = replyText.match(/CV (?:adaptado|actualizado).*?#(\d+)/i) || replyText.match(/\bcv\b.*?#(\d+)/i);
-  const matchCover = replyText.match(/Carta de presentación.*?#(\d+)/i);
-  const matchSummary = replyText.match(/informe\s+#?(\d+)/i);
+  const matchNum = replyText.match(/#(\d+)/) || replyText.match(/reports\/(\d+)-/) || replyText.match(/informe\s+#?(\d+)/i);
 
-  if (text && !text.startsWith('/')) {
+  if (text && !text.startsWith('/') && matchNum) {
+    const n = matchNum[1].replace(/^0+/, '');
+    const isApplyIntent = /^(?:apply|enviar|enviala|envíala|mándala|mandala|dale|adelante|si|sí|ok|procede|hazlo|confirmo|send|submit)\b/i.test(text.trim());
+    if (isApplyIntent) {
+      return handleSubmit(n, chatId);
+    }
+
+    const matchCv = replyText.match(/CV (?:adaptado|actualizado)/i) || replyText.match(/\bcv\b/i);
+    const matchCover = replyText.match(/Carta de presentación/i);
+
     if (matchCv) {
-      const n = matchCv[1];
       if (/\b(carta|cover)\b/i.test(text) && !/\b(cv|curriculum|currículum)\b/i.test(text)) {
         return rewriteCover(n, text, chatId);
       }
       return rewriteCv(n, text, chatId);
     }
     if (matchCover) {
-      const n = matchCover[1];
       if (/\b(cv|curriculum|currículum)\b/i.test(text) && !/\b(carta|cover)\b/i.test(text)) {
         return rewriteCv(n, text, chatId);
       }
       return rewriteCover(n, text, chatId);
     }
-    if (matchSummary) {
-      const n = matchSummary[1];
-      if (/\b(cv|curriculum|currículum|resumen|experiencia|educacion|educación)\b/i.test(text)) {
-        return rewriteCv(n, text, chatId);
-      }
-      return rewriteCover(n, text, chatId);
+    if (/\b(cv|curriculum|currículum|resumen|experiencia|educacion|educación)\b/i.test(text)) {
+      return rewriteCv(n, text, chatId);
     }
+    return rewriteCover(n, text, chatId);
   }
 
   switch (cmd) {

@@ -153,15 +153,27 @@ async function sendTelegramAlerts(hits) {
   if (!tg.enabled) return;
   if (DRY) { log(`DRY-RUN — would send ${hits.length} Telegram alert(s)`); return; }
   for (const r of hits) {
+    const numMatch = r.file.match(/^(\d+)-/);
+    const reportNum = numMatch ? numMatch[1].replace(/^0+/, '') : '';
     const lines = [
-      `🎯 <b>${tgEsc(r.company)}</b> — ${tgEsc(r.role)}`,
+      `🎯 <b>#${reportNum} ${tgEsc(r.company)}</b> — ${tgEsc(r.role)}`,
       `<b>${r.score.toFixed(1)}/5</b> · ${tgEsc(r.decision)} · ${tgEsc(r.archetype)}`,
       r.url ? `<a href="${tgEsc(r.url)}">Ver oferta</a>` : '',
       r.strengths.length ? '\n✅ ' + r.strengths.map(tgEsc).join('\n✅ ') : '',
       r.gaps.length ? '\n⚠️ ' + r.gaps.map(tgEsc).join('\n⚠️ ') : '',
-      `\n<i>reports/${tgEsc(r.file)}</i>`,
+      `\n<i>💡 Responde "apply" a este mensaje para enviar, o pulsa el botón abajo:</i>`,
+      `<i>reports/${tgEsc(r.file)}</i>`,
     ].filter(Boolean);
-    await tgSend(tg.token, tg.chatId, lines.join('\n').slice(0, 4000));
+    await tgSend(tg.token, tg.chatId, lines.join('\n').slice(0, 4000), {
+      reply_markup: reportNum ? {
+        inline_keyboard: [
+          [
+            { text: '🚀 Aplicar a esta oferta', callback_data: `submit:${reportNum}` },
+            { text: '❌ Descartar', callback_data: `discard:${reportNum}` }
+          ]
+        ]
+      } : undefined
+    });
   }
   log(`telegram: ${hits.length} alert(s) sent`);
 }
