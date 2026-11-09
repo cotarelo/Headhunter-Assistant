@@ -34,7 +34,8 @@ Tasks:
 1. Tailored CV PDF: if no output/cv-*.pdf exists for this report/company dated within 7 days, run the career-ops pdf mode for this report
    (EM headline variant for EM/Head roles, PM variant for PM/TPM/Program roles; strictly max 2 pages, A4). Facts only from cv.md.
    Follow modes/_custom.md: omit the Core Competencies section entirely (leave competencies empty/absent in the payload; do not render blue competency tags),
-   and under Earlier Roles do not output a role title or location.
+   keep exactly 3 bullet points for each main experience entry, include Technical Product Owner in Earlier Roles as "Activision Blizzard (King)",
+   do not list leadership skills as certifications (keep them under Skills), and under Earlier Roles do not output a role title, location or dates in the header.
 2. Write ${outRel}/cover.txt: short, simple cover letter in English, 120-180 words, only cv.md facts, no invented metrics.
 3. Write ${outRel}/answers.json with EXACTLY this shape:
    {"cv_pdf":"<path relative to career-ops root>","cover_letter_file":"${outRel}/cover.txt",

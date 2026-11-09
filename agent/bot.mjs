@@ -268,7 +268,10 @@ Rules:
 1. Strictly max 2 pages A4.
 2. Facts strictly from cv.md only. Never invent facts or metrics.
 3. Candidate contact email must be jorge.penacotarelo@gmail.com.
-4. Follow modes/_custom.md: omit the Core Competencies section entirely (leave competencies empty/absent in the payload; do not render blue competency blocks), and under Earlier Roles do not output a role title or location.
+4. Follow modes/_custom.md: omit the Core Competencies section entirely (leave competencies empty/absent in the payload; do not render blue competency blocks),
+   keep exactly 3 bullet points for each main experience entry, include Technical Product Owner in Earlier Roles as "Activision Blizzard (King)",
+   keep certifications strictly formal (leadership/soft skills belong under Skills),
+   and under Earlier Roles do not output a role title, location, or dates in the header.
 5. Generate the tailored HTML using build-cv-html.mjs and render the PDF using generate-pdf.mjs with --report=${report} --format=a4.
    Write the output PDF to output/cv-jorge-pena-cotarelo-${report}-${meta.company.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${today}.pdf (or similar path under output/).
 6. Update ${path.relative(ROOT, answersFile)}: set "cv_pdf" to the path of the new PDF relative to career-ops root.
