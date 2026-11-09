@@ -18,6 +18,8 @@ import dotenv from 'dotenv';
 import { tgConfig, tgCall, tgSend, tgSendFile, esc } from './lib/telegram.mjs';
 import { parseReport } from './notify.mjs';
 import { spawnSync } from 'node:child_process';
+import { submitApplication } from './submit.mjs';
+import { getFollowupData, checkAndSendFollowupAlerts, recordFollowupDone } from './lib/followup.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(HERE, '.env') });
@@ -124,7 +126,52 @@ async function handle(msg) {
       if (!/^\d+$/.test(n || '')) return tgSend(cfg.token, chatId, 'Uso: /enviada <nº informe>');
       setAppState(n, 'applied_manual');
       const r = spawnSync('node', ['set-status.mjs', '--report', n, 'Applied', '--note', 'Enviada por Jorge (confirmado en Telegram)'], { cwd: ROOT, encoding: 'utf8' });
-      return tgSend(cfg.token, chatId, r.status === 0 ? `✅ Informe #${n} marcado como Applied.` : `No pude actualizar el tracker: ${esc((r.stderr || r.stdout).slice(0, 300))}`);
+      spawnSync('node', ['followup-seed.mjs', n], { cwd: ROOT, encoding: 'utf8' });
+      return tgSend(cfg.token, chatId, r.status === 0 ? `✅ Informe #${n} marcado como Applied. Seguimiento programado a los 7 y 14 días.` : `No pude actualizar el tracker: ${esc((r.stderr || r.stdout).slice(0, 300))}`);
+    }
+    case '/enviar': {
+      const n = text.split(/\s+/)[1];
+      if (!/^\d+$/.test(n || '')) return tgSend(cfg.token, chatId, 'Uso: <code>/enviar &lt;nº informe&gt;</code>\nEjemplo: <code>/enviar 104</code>');
+      return handleSubmit(n, chatId);
+    }
+    case '/seguimiento': {
+      let data = null;
+      try {
+        data = getFollowupData(ROOT);
+      } catch (e) {
+        return tgSend(cfg.token, chatId, `Error al consultar seguimiento: ${esc(e.message)}`);
+      }
+      const entries = data.entries || [];
+      if (!entries.length) {
+        return tgSend(cfg.token, chatId, 'No hay candidaturas activas que requieran seguimiento.');
+      }
+      const lines = [
+        `📋 <b>Seguimiento de candidaturas (${entries.length} activa${entries.length > 1 ? 's' : ''})</b>`,
+        ''
+      ];
+      for (const e of entries) {
+        const days = e.daysSinceApplication ?? '?';
+        let badge = '⏳ En espera';
+        if (e.urgency === 'urgent') badge = '🚨 URGENTE';
+        else if (e.urgency === 'overdue') badge = '⚠️ Vencido';
+        else if (e.urgency === 'due') badge = '🔔 Toca seguimiento';
+
+        lines.push(`• <b>#${e.num} ${esc(e.company)}</b> — ${esc(e.role)}`);
+        lines.push(`   Estado: <b>${esc(e.status)}</b> · Enviada: hace <b>${days} días</b>`);
+        lines.push(`   Seguimiento: ${badge} (F/U realizados: ${e.followupCount || 0})`);
+        if (e.nextFollowupDate) lines.push(`   Próxima fecha: <code>${e.nextFollowupDate}</code>`);
+        lines.push('');
+      }
+      lines.push('<i>Usa /contactado &lt;nº&gt; cuando hagas un seguimiento o /enviada &lt;nº&gt; si la enviaste tú.</i>');
+      return tgSend(cfg.token, chatId, lines.join('\n'));
+    }
+    case '/contactado': {
+      const parts = text.split(/\s+/);
+      const n = parts[1];
+      const note = parts.slice(2).join(' ').trim();
+      if (!/^\d+$/.test(n || '')) return tgSend(cfg.token, chatId, 'Uso: <code>/contactado &lt;nº informe&gt; [nota]</code>\nEjemplo: <code>/contactado 104 Mensaje a recruiter por LinkedIn</code>');
+      const ok = recordFollowupDone(ROOT, n, note);
+      return tgSend(cfg.token, chatId, ok ? `✅ Registrado seguimiento para el informe #${n}.` : `No pude actualizar el seguimiento para el informe #${n}.`);
     }
     case '/carta': {
       const parts = text.split(/\s+/);
@@ -151,9 +198,12 @@ async function handle(msg) {
         '/estado — último ciclo y cola',
         '/top — mejores ofertas (7 días)',
         '/cola — próximas ofertas por evaluar',
+        '/enviar N — enviar candidatura automáticamente (1 clic)',
         '/carta N &lt;cambios&gt; — pedir a agy que modifique la carta',
         '/cv N &lt;cambios&gt; — pedir a agy que modifique el CV',
         '/enviada N — marcar como Applied la candidatura del informe N',
+        '/seguimiento — ver estado y recordatorios a los 7 y 14 días',
+        '/contactado N [nota] — registrar seguimiento en LinkedIn/email',
         '',
         '💡 También puedes responder directamente a cualquier mensaje de carta o archivo de CV con los cambios que quieras.',
         'Las ofertas con nota ≥ 3.8 te llegan aquí con su carta y formulario.',
@@ -380,6 +430,9 @@ async function handleCallback(cb) {
   if (!cfg.chatId || chatId !== cfg.chatId) { log('ignored callback from foreign chat', chatId); return; }
   const [action, report] = String(cb.data || '').split(':');
   if (!/^\d+$/.test(report || '')) return;
+  if (action === 'submit') {
+    return handleSubmit(report, chatId);
+  }
   if (action === 'edit_cover') {
     return tgSend(cfg.token, chatId, `✍️ Para modificar la carta del informe #${report}, responde directamente al mensaje de la carta con tus cambios, o escribe:\n<code>/carta ${report} &lt;lo que quieras cambiar&gt;</code>`);
   }
@@ -390,6 +443,14 @@ async function handleCallback(cb) {
     setAppState(report, 'manual_pending');
     return tgSend(cfg.token, chatId, `👍 Informe #${report}: la envías tú. Cuando la hayas enviado escribe <code>/enviada ${report}</code> y la marco como Applied.`);
   }
+  if (action === 'followup_done') {
+    const ok = recordFollowupDone(ROOT, report);
+    return tgSend(cfg.token, chatId, ok ? `✅ Registrado seguimiento para el informe #${report}. ¡Buen trabajo!` : `No pude registrar el seguimiento para #${report}.`);
+  }
+  if (action === 'responded') {
+    const r = spawnSync('node', ['set-status.mjs', '--report', report, 'Responded', '--note', 'Respuesta de la empresa confirmada en Telegram'], { cwd: ROOT, encoding: 'utf8' });
+    return tgSend(cfg.token, chatId, r.status === 0 ? `🎉 ¡Excelente! Informe #${report} marcado como <b>Responded</b>.` : `No pude actualizar el tracker: ${esc((r.stderr || r.stdout).slice(0, 200))}`);
+  }
   if (action === 'discard') {
     setAppState(report, 'discarded');
     const r = spawnSync('node', ['set-status.mjs', '--report', report, 'Discarded', '--note', 'Descartada desde Telegram'], { cwd: ROOT, encoding: 'utf8' });
@@ -397,11 +458,71 @@ async function handleCallback(cb) {
   }
 }
 
+async function handleSubmit(report, chatId) {
+  let meta = {};
+  try { meta = parseReport(reportFile(report)); } catch { meta = { company: `Empresa #${report}`, role: '' }; }
+
+  await tgSend(cfg.token, chatId, `🚀 <b>Enviando candidatura #${report} (${esc(meta.company)})...</b>\nAbriendo el portal, rellenando datos y adjuntando archivos...`);
+
+  let res = null;
+  try {
+    res = await submitApplication(report);
+  } catch (e) {
+    return tgSend(cfg.token, chatId, `⚠️ Error al intentar enviar #${report}: ${esc(e.message)}`);
+  }
+
+  if (res.ok) {
+    await tgSend(cfg.token, chatId, [
+      `🎉 <b>¡Candidatura enviada con éxito! — #${report} (${esc(res.meta.company)})</b>`,
+      `• Rol: <b>${esc(res.meta.role)}</b>`,
+      `• Estado: Marcada como <b>Applied</b> en el tracker.`,
+      `• Seguimiento: Programado automáticamente para dentro de <b>7 y 14 días</b>.`,
+      '',
+      `<i>Captura de confirmación recibida del portal:</i>`
+    ].join('\n'));
+
+    if (res.screenshot && fs.existsSync(res.screenshot)) {
+      await tgSendFile(cfg.token, chatId, res.screenshot, { caption: `Confirmación de envío — #${report} (${esc(res.meta.company)})` });
+    }
+    return;
+  }
+
+  if (res.reason === 'captcha') {
+    await tgSend(cfg.token, chatId, [
+      `⚠️ <b>CAPTCHA detectado en #${report} (${esc(res.meta.company)})</b>`,
+      '',
+      `El portal requiere verificación humana (Turnstile/reCAPTCHA). No te preocupes: todos tus datos y CV están listos.`,
+      '',
+      `👉 <a href="${esc(res.meta.url)}">Abre el formulario aquí</a> y pulsa enviar.`,
+      `Cuando la envíes escribe <code>/enviada ${report}</code>.`
+    ].join('\n'));
+  } else {
+    await tgSend(cfg.token, chatId, [
+      `⚠️ <b>No se pudo enviar automáticamente #${report} (${esc(res.meta.company)})</b>: ${esc(res.error || 'revisa los campos')}.`,
+      '',
+      `👉 <a href="${esc(res.meta.url)}">Completar manualmente aquí</a>.`,
+      `Una vez enviada escribe <code>/enviada ${report}</code>.`
+    ].join('\n'));
+  }
+
+  if (res.screenshot && fs.existsSync(res.screenshot)) {
+    await tgSendFile(cfg.token, chatId, res.screenshot, { caption: `Estado del formulario — #${report}` });
+  }
+}
+
 async function main() {
   log(`starting; paired chat: ${cfg.chatId || '(none — send /start)'}`);
   let offset = 0;
+  let lastFollowupCheck = 0;
+
   for (;;) {
     try {
+      // Periodic follow-up check (every 6 hours)
+      if (cfg.chatId && (Date.now() - lastFollowupCheck > 6 * 3600 * 1000)) {
+        lastFollowupCheck = Date.now();
+        checkAndSendFollowupAlerts(ROOT, cfg).catch((e) => log('followup check error', e.message));
+      }
+
       const updates = await tgCall(cfg.token, 'getUpdates', { offset, timeout: 50, allowed_updates: ['message', 'callback_query'] });
       for (const u of updates) {
         offset = u.update_id + 1;

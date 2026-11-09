@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 import dotenv from 'dotenv';
 import { tgConfig, tgSend, esc as tgEsc } from './lib/telegram.mjs';
+import { checkAndSendFollowupAlerts } from './lib/followup.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(HERE, '.env') });
@@ -217,6 +218,8 @@ async function runDigest() {
     ${recent.length ? `<table border="1" cellpadding="4" style="border-collapse:collapse"><tr><th>Score</th><th>Empresa</th><th>Rol</th><th>Decisión</th></tr>${rows}</table>` : '<p>Sin evaluaciones nuevas hoy.</p>'}`;
   const text = `Evaluadas 24h: ${recent.length} | pendientes: ${pend}\n` + recent.map((r) => `${isNaN(r.score) ? '?' : r.score.toFixed(1)}  ${r.company} — ${r.role}`).join('\n');
   await send(`📋 Headhunter: ${recent.length} evaluadas, ${pend} pendientes (${new Date().toLocaleDateString('es-ES')})`, html, text);
+  const tg = tgConfig(ROOT);
+  await checkAndSendFollowupAlerts(ROOT, tg).catch((e) => log('followup check error', e.message));
 }
 
 async function main() {

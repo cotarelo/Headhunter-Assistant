@@ -174,6 +174,9 @@ async function main() {
     reply_markup: {
       inline_keyboard: [
         [
+          { text: '🚀 Enviar candidatura', callback_data: `submit:${report}` },
+        ],
+        [
           { text: '✏️ Cambiar carta', callback_data: `edit_cover:${report}` },
           { text: '📄 Cambiar CV', callback_data: `edit_cv:${report}` },
         ],
