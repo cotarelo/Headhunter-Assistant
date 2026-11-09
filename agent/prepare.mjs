@@ -32,7 +32,9 @@ Inputs (read them): ${outRel}/form.json (the form fields, exact selectors), the 
 cv.md, config/profile.yml, modes/_profile.md (section "Standard Application Form Answers" is binding), modes/_custom.md.
 Tasks:
 1. Tailored CV PDF: if no output/cv-*.pdf exists for this report/company dated within 7 days, run the career-ops pdf mode for this report
-   (EM headline variant for EM/Head roles, PM variant for PM/TPM/Program roles; max 2 pages, A4). Facts only from cv.md.
+   (EM headline variant for EM/Head roles, PM variant for PM/TPM/Program roles; strictly max 2 pages, A4). Facts only from cv.md.
+   Follow modes/_custom.md: omit the Core Competencies section entirely (leave competencies empty/absent in the payload; do not render blue competency tags),
+   and under Earlier Roles do not output a role title or location.
 2. Write ${outRel}/cover.txt: short, simple cover letter in English, 120-180 words, only cv.md facts, no invented metrics.
 3. Write ${outRel}/answers.json with EXACTLY this shape:
    {"cv_pdf":"<path relative to career-ops root>","cover_letter_file":"${outRel}/cover.txt",
@@ -40,6 +42,7 @@ Tasks:
                 "source":"standard|profile|cv|generated","needs_review":<bool>,"note":"<why, if needs_review>"}],
     "warnings":["..."]}
    - One entry per form.json field. For checkbox use true/false. For file fields use "cv" (resume) or "cover" (cover letter).
+   - Candidate email: always use jorge.penacotarelo@gmail.com (never hotmail).
    - Start date: application date is ${today}; answer = ${today} + 1 day + 15 days, written as a concrete date plus "(15 days notice)".
    - Salary: 75000 (number fields) or "€75,000 gross/year" (text). Never below 65000.
    - Diversity/EEO/disability/gender/ethnicity: "Prefer not to say" (or the closest option) and needs_review=false.
@@ -48,7 +51,9 @@ Tasks:
    - Anything not supported by cv.md/profile/_profile.md: leave value "" and needs_review=true with a note. Never invent facts.
 Use your native file-writing tool for files (no shell redirection). Do not edit cv.md, config/, modes/ or portals.yml.
 End with one line: answers_ready=<true|false>.`;
-  const r = spawnSync(process.env.AGY_BIN || 'agy', ['-p', prompt, '--output-format', 'stream-json'], {
+  const agyArgs = ['-p', prompt, '--output-format', 'stream-json'];
+  if (process.env.AGY_MODEL) agyArgs.push('--model', process.env.AGY_MODEL);
+  const r = spawnSync(process.env.AGY_BIN || 'agy', agyArgs, {
     cwd: ROOT, encoding: 'utf8', timeout: Number(process.env.AGY_TIMEOUT_SECONDS || 3600) * 1000, maxBuffer: 64 * 1024 * 1024,
   });
   fs.writeFileSync(path.join(ROOT, outRel, 'agy.log'), (r.stdout || '') + '\n' + (r.stderr || ''));

@@ -160,7 +160,9 @@ Rules:
 3. Write ONLY the text of the new cover letter to output/applications/${String(report).padStart(3, '0')}/cover.txt using your write tool.
 End with: cover_ready=true`;
 
-  const r = spawnSync(process.env.AGY_BIN || 'agy', ['-p', prompt], {
+  const agyArgs = ['-p', prompt];
+  if (process.env.AGY_MODEL) agyArgs.push('--model', process.env.AGY_MODEL);
+  const r = spawnSync(process.env.AGY_BIN || 'agy', agyArgs, {
     cwd: ROOT, encoding: 'utf8', timeout: 300000,
   });
 
