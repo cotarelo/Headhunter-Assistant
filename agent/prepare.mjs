@@ -111,15 +111,24 @@ async function fillForm(form, answers, out) {
 
 function summaryText(meta, answers, fill, report) {
   const lines = [`📝 <b>Candidatura preparada</b> (no enviada)`, `<b>${esc(meta.company)}</b> — ${esc(meta.role)}`, `Score <b>${meta.score?.toFixed?.(1)}</b>/5 · informe #${report}`, ''];
+  let omitted = 0;
   for (const a of answers.answers) {
     if (a.type === 'checkbox' && a.value !== true) continue;
-    const v = a.type === 'file' ? (a.value === 'cover' ? '📎 carta' : '📎 CV') : a.type === 'checkbox' ? '☑️' : String(a.value).slice(0, 300);
-    lines.push(`${a.needs_review ? '⚠️' : '•'} <b>${esc(a.label.slice(0, 90))}</b>\n   ${esc(v) || '<i>(vacío)</i>'}${a.needs_review && a.note ? `\n   <i>${esc(a.note.slice(0, 200))}</i>` : ''}`);
+    const v = a.type === 'file' ? (a.value === 'cover' ? '📎 carta' : '📎 CV') : a.type === 'checkbox' ? '☑️' : String(a.value).slice(0, 200);
+    const line = `${a.needs_review ? '⚠️' : '•'} <b>${esc(a.label.slice(0, 90))}</b>\n   ${esc(v) || '<i>(vacío)</i>'}${a.needs_review && a.note ? `\n   <i>${esc(a.note.slice(0, 150))}</i>` : ''}`;
+    if (lines.join('\n').length + line.length > 3400) {
+      omitted++;
+      continue;
+    }
+    lines.push(line);
+  }
+  if (omitted > 0) {
+    lines.push(`• <i>...y ${omitted} campos más rellenados automáticamente</i>`);
   }
   if (answers.warnings?.length) lines.push('', '⚠️ ' + answers.warnings.map(esc).join('\n⚠️ '));
-  if (fill.errors.length || fill.skipped.length) lines.push('', `No rellenados: ${esc([...fill.skipped, ...fill.errors].join('; ').slice(0, 600))}`);
-  lines.push('', `👉 <a href="${esc(meta.url)}">Abrir oferta</a> — revisa y envía tú (fase 3b).`);
-  return lines.join('\n').slice(0, 4000);
+  if (fill.errors.length || fill.skipped.length) lines.push('', `No rellenados: ${esc([...fill.skipped, ...fill.errors].join('; ').slice(0, 300))}`);
+  lines.push('', `👉 <a href="${esc(meta.url)}">Abrir oferta</a> — pulsa el botón abajo para enviar con 1 clic.`);
+  return lines.join('\n');
 }
 
 async function main() {
