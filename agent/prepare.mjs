@@ -110,25 +110,54 @@ async function fillForm(form, answers, out) {
 }
 
 function summaryText(meta, answers, fill, report) {
-  const lines = [`📝 <b>Candidatura preparada</b> (no enviada)`, `<b>${esc(meta.company)}</b> — ${esc(meta.role)}`, `Score <b>${meta.score?.toFixed?.(1)}</b>/5 · informe #${report}`, ''];
-  let omitted = 0;
-  for (const a of answers.answers) {
-    if (a.type === 'checkbox' && a.value !== true) continue;
-    const v = a.type === 'file' ? (a.value === 'cover' ? '📎 carta' : '📎 CV') : a.type === 'checkbox' ? '☑️' : String(a.value).slice(0, 200);
-    const line = `${a.needs_review ? '⚠️' : '•'} <b>${esc(a.label.slice(0, 90))}</b>\n   ${esc(v) || '<i>(vacío)</i>'}${a.needs_review && a.note ? `\n   <i>${esc(a.note.slice(0, 150))}</i>` : ''}`;
-    if (lines.join('\n').length + line.length > 3400) {
-      omitted++;
-      continue;
+  const lines = [
+    `📝 <b>Candidatura preparada</b> (no enviada)`,
+    `<b>${esc(meta.company)}</b> — ${esc(meta.role)}`,
+    `Score <b>${meta.score?.toFixed?.(1)}</b>/5 · informe #${report}`,
+    '',
+    `📊 <b>Campos:</b> ${fill.filled.length} rellenados · ${fill.skipped.length + fill.errors.length} pendientes`,
+  ];
+
+  const reviewItems = (answers.answers || []).filter((a) => a.needs_review);
+  if (reviewItems.length > 0) {
+    lines.push('', `⚠️ <b>Requieren atención (${reviewItems.length}):</b>`);
+    for (const a of reviewItems) {
+      const v = a.value ? `<code>${esc(String(a.value).slice(0, 80))}</code>` : '<i>(en blanco)</i>';
+      lines.push(`• <b>${esc(a.label.slice(0, 80))}</b>\n   ↳ ${v}${a.note ? `\n   <i>${esc(a.note.slice(0, 120))}</i>` : ''}`);
     }
-    lines.push(line);
   }
-  if (omitted > 0) {
-    lines.push(`• <i>...y ${omitted} campos más rellenados automáticamente</i>`);
+
+  const standardItems = (answers.answers || []).filter((a) => !a.needs_review && a.value && a.value !== false);
+  if (standardItems.length > 0) {
+    lines.push('', `✅ <b>Campos clave rellenados:</b>`);
+    let count = 0;
+    for (const a of standardItems) {
+      if (lines.join('\n').length > 2600) break;
+      const v = a.type === 'file' ? (a.value === 'cover' ? '📎 Carta de presentación' : '📎 CV adaptado') : String(a.value).slice(0, 70);
+      lines.push(`• <b>${esc(a.label.slice(0, 60))}:</b> ${esc(v)}`);
+      count++;
+    }
+    const remaining = standardItems.length - count;
+    if (remaining > 0) {
+      lines.push(`• <i>...y ${remaining} campos estándar más.</i>`);
+    }
   }
-  if (answers.warnings?.length) lines.push('', '⚠️ ' + answers.warnings.map(esc).join('\n⚠️ '));
-  if (fill.errors.length || fill.skipped.length) lines.push('', `No rellenados: ${esc([...fill.skipped, ...fill.errors].join('; ').slice(0, 300))}`);
-  lines.push('', `👉 <a href="${esc(meta.url)}">Abrir oferta</a> — pulsa el botón abajo para enviar con 1 clic.`);
-  return lines.join('\n');
+
+  if (fill.errors.length > 0) {
+    lines.push('', `❌ <b>Errores al rellenar:</b>\n${esc(fill.errors.slice(0, 3).join('\n'))}`);
+  }
+
+  lines.push(
+    '',
+    `👉 <a href="${esc(meta.url)}">Abrir oferta original</a>`,
+    `💡 Revisa el pantallazo adjunto. Puedes responder con <b>apply</b> / <b>enviar</b> o pulsar el botón abajo.`
+  );
+
+  let result = lines.join('\n');
+  if (result.length > 3800) {
+    result = result.slice(0, 3750) + '\n\n<i>[...resumen recortado...]</i>';
+  }
+  return result;
 }
 
 async function main() {
@@ -159,7 +188,7 @@ async function main() {
   const tg = tgConfig(ROOT);
   if (has('--no-telegram') || !tg.enabled) { log('4/4 telegram skipped'); return; }
   log('4/4 telegram');
-  await tgSendFile(tg.token, tg.chatId, path.join(out, 'form-filled.png'), { caption: `${meta.company} — ${meta.role}: formulario rellenado (sin enviar)`, kind: 'document' });
+  await tgSendFile(tg.token, tg.chatId, path.join(out, 'form-filled.png'), { caption: `📸 <b>#${report} ${esc(meta.company)}</b> — ${esc(meta.role)}\nFormulario rellenado (sin enviar)`, kind: 'document' });
   if (answers.cv_pdf && fs.existsSync(path.join(ROOT, answers.cv_pdf))) {
     await tgSendFile(tg.token, tg.chatId, path.join(ROOT, answers.cv_pdf), {
       caption: `📄 <b>CV adaptado — #${report} (${esc(meta.company)})</b>\n\n<i>💡 Para modificar el CV, responde directamente a este archivo con tus cambios (ej: "enfoca más a SRE" o "resalta el proyecto de cloud en King").</i>`,

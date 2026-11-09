@@ -23,8 +23,20 @@ export async function tgCall(token, method, body, { multipart = false } = {}) {
   return json.result;
 }
 
-export const tgSend = (token, chatId, text, extra = {}) =>
-  tgCall(token, 'sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...extra });
+export async function tgSend(token, chatId, text, extra = {}) {
+  let safeText = typeof text === 'string' && text.length > 4000
+    ? text.slice(0, 3900) + '\n\n<i>[...recortado por longitud...]</i>'
+    : text;
+  try {
+    return await tgCall(token, 'sendMessage', { chat_id: chatId, text: safeText, parse_mode: 'HTML', disable_web_page_preview: true, ...extra });
+  } catch (err) {
+    if (String(err.message).includes("can't parse entities") || String(err.message).includes('message is too long')) {
+      const plain = String(text || '').replace(/<[^>]+>/g, '').slice(0, 3900);
+      return await tgCall(token, 'sendMessage', { chat_id: chatId, text: plain, disable_web_page_preview: true, ...extra });
+    }
+    throw err;
+  }
+}
 
 export async function tgSendFile(token, chatId, filePath, { caption = '', kind = 'document', extra = {} } = {}) {
   const fd = new FormData();
