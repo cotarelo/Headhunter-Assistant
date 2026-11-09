@@ -17,6 +17,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 import dotenv from 'dotenv';
@@ -198,6 +199,22 @@ async function runAlerts() {
     // retry next cycle only if every configured channel failed
     if (errors.length && (errors.length >= (tgOn ? 2 : 1))) throw new Error(errors.join(' | '));
     if (errors.length) log('partial delivery:', errors.join(' | '));
+
+    // Phase 3b: automatically prepare application packages for high-scoring hits
+    if (!DRY) {
+      for (const r of hits) {
+        const numMatch = r.file.match(/^(\d+)-/);
+        if (numMatch) {
+          const reportNum = numMatch[1].replace(/^0+/, '');
+          log(`auto-preparing application package for report #${reportNum} (${r.company})...`);
+          try {
+            spawnSync('node', ['prepare.mjs', '--report', reportNum], { cwd: HERE, encoding: 'utf8', timeout: 3600000 });
+          } catch (e) {
+            log(`auto-prepare error on report #${reportNum}:`, e.message);
+          }
+        }
+      }
+    }
   }
   state.notified = [...seen, ...fresh];
   state.lastAlertRun = new Date().toISOString();

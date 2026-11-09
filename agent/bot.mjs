@@ -134,6 +134,19 @@ async function handle(msg) {
       if (!/^\d+$/.test(n || '')) return tgSend(cfg.token, chatId, 'Uso: <code>/enviar &lt;nº informe&gt;</code>\nEjemplo: <code>/enviar 104</code>');
       return handleSubmit(n, chatId);
     }
+    case '/preparar': {
+      const parts = text.split(/\s+/);
+      const n = parts[1];
+      if (!/^\d+$/.test(n || '')) return tgSend(cfg.token, chatId, 'Uso: <code>/preparar &lt;nº informe&gt;</code>\nEjemplo: <code>/preparar 146</code>');
+      let meta = {};
+      try { meta = parseReport(reportFile(n)); } catch { meta = { company: `Empresa #${n}`, role: '' }; }
+      await tgSend(cfg.token, chatId, `⏳ <b>Preparando candidatura #${n} (${esc(meta.company)})...</b>\nExtrayendo formulario, adaptando CV y carta con agy (1-2 minutos en DietPi)...`);
+      const prep = spawnSync('node', ['prepare.mjs', '--report', String(n)], { cwd: HERE, encoding: 'utf8', timeout: 3600000 });
+      if (prep.status !== 0) {
+        return tgSend(cfg.token, chatId, `⚠️ Error al preparar #${n}: ${esc((prep.stderr || prep.stdout || '').slice(0, 300))}`);
+      }
+      return;
+    }
     case '/seguimiento': {
       let data = null;
       try {
@@ -461,6 +474,21 @@ async function handleCallback(cb) {
 async function handleSubmit(report, chatId) {
   let meta = {};
   try { meta = parseReport(reportFile(report)); } catch { meta = { company: `Empresa #${report}`, role: '' }; }
+
+  // Check if prepared
+  const appDirectory = appDir(report);
+  const answersFile = path.join(appDirectory, 'answers.json');
+  const formFile = path.join(appDirectory, 'form.json');
+
+  if (!fs.existsSync(answersFile) || !fs.existsSync(formFile)) {
+    await tgSend(cfg.token, chatId, `⏳ <b>La candidatura #${report} (${esc(meta.company)}) no estaba preparada todavía.</b>\n\nPreparando ahora con agy (extrayendo formulario, adaptando CV y carta)... Te enviaré el formulario relleno en breve (1-2 minutos en DietPi).`);
+    const prep = spawnSync('node', ['prepare.mjs', '--report', String(report)], { cwd: HERE, encoding: 'utf8', timeout: 3600000 });
+    if (prep.status !== 0 || !fs.existsSync(answersFile)) {
+      return tgSend(cfg.token, chatId, `⚠️ Error al preparar #${report}: ${esc((prep.stderr || prep.stdout || '').slice(0, 300))}`);
+    }
+    // prepare.mjs sends the whole package (filled form screenshot, CV PDF, cover letter, and buttons)
+    return;
+  }
 
   await tgSend(cfg.token, chatId, `🚀 <b>Enviando candidatura #${report} (${esc(meta.company)})...</b>\nAbriendo el portal, rellenando datos y adjuntando archivos...`);
 
