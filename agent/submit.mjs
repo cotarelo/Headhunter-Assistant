@@ -96,7 +96,16 @@ export async function submitApplication(report, { dryRun = false } = {}) {
           await loc.selectOption({ label: String(a.value) }).catch(() => loc.selectOption(String(a.value)));
         } else {
           if (a.value === '' || a.value == null) { result.skipped.push(a.label); continue; }
-          await loc.fill(String(a.value));
+          const isCombobox = await loc.evaluate((el) => el.getAttribute('role') === 'combobox' || el.classList.contains('select__input')).catch(() => false);
+          if (isCombobox) {
+            await loc.focus();
+            await loc.pressSequentially(String(a.value).trim(), { delay: 40 });
+            await page.waitForTimeout(300);
+            await page.keyboard.press('Enter');
+            await page.waitForTimeout(200);
+          } else {
+            await loc.fill(String(a.value));
+          }
         }
         result.filled.push(a.label);
       } catch (e) { result.errors.push(`${a.label}: ${e.message.split('\n')[0]}`); }
