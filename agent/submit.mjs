@@ -106,14 +106,25 @@ export async function submitApplication(report, { dryRun = false } = {}) {
     // 2. Check for CAPTCHA blockers
     log('checking for CAPTCHA...');
     const hasCaptcha = await page.evaluate(() => {
+      const isVisibleChallenge = (el) => {
+        if (!el || el.offsetParent === null) return false;
+        const rect = el.getBoundingClientRect();
+        // Ignore Google reCAPTCHA invisible badge (size=invisible, grecaptcha-badge, or fixed 256x60 logo)
+        if (el.closest('.grecaptcha-badge') || (el.src && el.src.includes('size=invisible'))) {
+          return false;
+        }
+        return rect.width > 20 && rect.height > 20;
+      };
+
       const selectors = [
         'iframe[src*="turnstile"]', 'iframe[src*="challenges.cloudflare.com"]',
-        'iframe[src*="recaptcha"]', 'iframe[src*="hcaptcha"]',
-        '.cf-turnstile', '.g-recaptcha', '.h-captcha', '#turnstile-wrapper'
+        'iframe[src*="recaptcha"][src*="bframe"]', 'iframe[title*="challenge"]',
+        'iframe[src*="hcaptcha"][src*="checkbox"]', 'iframe[src*="hcaptcha"][src*="challenge"]',
+        '.cf-turnstile', '.h-captcha'
       ];
       for (const s of selectors) {
         const el = document.querySelector(s);
-        if (el && el.offsetParent !== null) return true;
+        if (isVisibleChallenge(el)) return true;
       }
       return false;
     });
