@@ -59,6 +59,57 @@ function recentReports(days = 7) {
     .sort((a, b) => (b.score || 0) - (a.score || 0));
 }
 
+function extractReportNumber(msg) {
+  const text = (msg.text || '').trim();
+  const explicitMatch = text.match(/^(?:apply|enviar|preparar|submit|mandar)\s+(\d+)\b/i);
+  if (explicitMatch) return explicitMatch[1].replace(/^0+/, '');
+
+  if (!msg.reply_to_message) return null;
+
+  const kb = msg.reply_to_message?.reply_markup?.inline_keyboard || [];
+  for (const row of kb) {
+    for (const btn of row) {
+      const m = (btn.callback_data || '').match(/(?:submit|apply|discard|prep):(\d+)/);
+      if (m) return m[1].replace(/^0+/, '');
+    }
+  }
+
+  const replyText = msg.reply_to_message?.text || msg.reply_to_message?.caption || '';
+  if (!replyText) return null;
+
+  const mReports = replyText.match(/reports\/(\d+)-/);
+  if (mReports) return mReports[1].replace(/^0+/, '');
+
+  const mHeader = replyText.match(/🎯\s*#(\d+)/);
+  if (mHeader) return mHeader[1].replace(/^0+/, '');
+
+  const mInfo = replyText.match(/(?:informe|candidatura)\s*#?(\d+)/i);
+  if (mInfo) return mInfo[1].replace(/^0+/, '');
+
+  // Strip Archetype labels like "(Primary #1)" or "(Secondary #2)" before matching #<num>
+  const cleanText = replyText.replace(/\b(?:Primary|Secondary)\s+#\d+\b/gi, '');
+  const mHash = cleanText.match(/#(\d+)/);
+  if (mHash) return mHash[1].replace(/^0+/, '');
+
+  // Fallback by company name from header
+  const titleMatch = replyText.match(/🎯\s*(?:#\d+\s+)?([A-Za-z0-9_-]+)/);
+  if (titleMatch) {
+    const company = titleMatch[1].toLowerCase();
+    try {
+      const matchingFiles = fs.readdirSync(path.join(ROOT, 'reports'))
+        .filter((f) => f.toLowerCase().includes(company) && f.endsWith('.md'))
+        .sort()
+        .reverse();
+      if (matchingFiles.length > 0) {
+        const m = matchingFiles[0].match(/^(\d+)-/);
+        if (m) return m[1].replace(/^0+/, '');
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
 async function handle(msg) {
   const chatId = String(msg.chat.id);
   const text = (msg.text || '').trim();
@@ -76,10 +127,9 @@ async function handle(msg) {
   if (cfg.chatId !== chatId) { log('ignored message from foreign chat', chatId); return; }
 
   const replyText = msg.reply_to_message?.text || msg.reply_to_message?.caption || '';
-  const matchNum = replyText.match(/#(\d+)/) || replyText.match(/reports\/(\d+)-/) || replyText.match(/informe\s+#?(\d+)/i);
+  const n = extractReportNumber(msg);
 
-  if (text && !text.startsWith('/') && matchNum) {
-    const n = matchNum[1].replace(/^0+/, '');
+  if (text && !text.startsWith('/') && n) {
     const isApplyIntent = /^(?:apply|enviar|enviala|envíala|mándala|mandala|dale|adelante|si|sí|ok|procede|hazlo|confirmo|send|submit)\b/i.test(text.trim());
     if (isApplyIntent) {
       return handleSubmit(n, chatId);
@@ -594,8 +644,14 @@ async function main() {
       const updates = await tgCall(cfg.token, 'getUpdates', { offset, timeout: 50, allowed_updates: ['message', 'callback_query'] });
       for (const u of updates) {
         offset = u.update_id + 1;
-        if (u.message) await handle(u.message).catch((e) => log('handle error', e.message));
-        if (u.callback_query) await handleCallback(u.callback_query).catch((e) => log('callback error', e.message));
+        if (u.message) {
+          log('msg from', u.message.chat?.id, 'text:', JSON.stringify(u.message.text || ''), 'reply_to:', JSON.stringify(u.message.reply_to_message?.text || ''));
+          await handle(u.message).catch((e) => log('handle error', e.message));
+        }
+        if (u.callback_query) {
+          log('callback from', u.callback_query.message?.chat?.id, 'data:', u.callback_query.data);
+          await handleCallback(u.callback_query).catch((e) => log('callback error', e.message));
+        }
       }
     } catch (e) {
       log('poll error', e.message);
