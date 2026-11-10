@@ -85,6 +85,16 @@ async function handle(msg) {
       return handleSubmit(n, chatId);
     }
 
+    const isAppliedIntent = /^(?:enviada|mandada|hecho|hecha|ya|lista|listo|done|aplicada|applied)\b/i.test(text.trim());
+    if (isAppliedIntent) {
+      setAppState(n, 'applied_manual');
+      const r = spawnSync('node', ['set-status.mjs', '--report', n, 'Applied', '--note', 'Enviada manualmente (confirmado en Telegram por respuesta)'], { cwd: ROOT, encoding: 'utf8' });
+      spawnSync('node', ['followup-seed.mjs', n], { cwd: ROOT, encoding: 'utf8' });
+      return tgSend(cfg.token, chatId, r.status === 0
+        ? `✅ <b>¡Genial! Candidatura #${n} marcada como Applied.</b>\nSeguimiento programado a los 7 y 14 días.`
+        : `No pude actualizar el tracker: ${esc((r.stderr || r.stdout).slice(0, 300))}`);
+    }
+
     const matchCv = replyText.match(/CV (?:adaptado|actualizado)/i) || replyText.match(/\bcv\b/i);
     const matchCover = replyText.match(/Carta de presentación/i);
 
@@ -104,6 +114,17 @@ async function handle(msg) {
       return rewriteCv(n, text, chatId);
     }
     return rewriteCover(n, text, chatId);
+  }
+
+  const standaloneAppliedMatch = text.match(/^(?:enviada|mandada|aplicada|applied)\s+(\d+)/i) || text.match(/^(?:ya\s+(?:la\s+)?envi[eé])\s+(\d+)/i);
+  if (standaloneAppliedMatch) {
+    const n = standaloneAppliedMatch[1];
+    setAppState(n, 'applied_manual');
+    const r = spawnSync('node', ['set-status.mjs', '--report', n, 'Applied', '--note', 'Enviada por Jorge (confirmado en Telegram)'], { cwd: ROOT, encoding: 'utf8' });
+    spawnSync('node', ['followup-seed.mjs', n], { cwd: ROOT, encoding: 'utf8' });
+    return tgSend(cfg.token, chatId, r.status === 0
+      ? `✅ <b>Candidatura #${n} marcada como Applied.</b>\nSeguimiento programado automáticamente para dentro de 7 y 14 días.`
+      : `No pude actualizar el tracker: ${esc((r.stderr || r.stdout).slice(0, 300))}`);
   }
 
   switch (cmd) {
@@ -466,6 +487,14 @@ async function handleCallback(cb) {
     const r = spawnSync('node', ['set-status.mjs', '--report', report, 'Responded', '--note', 'Respuesta de la empresa confirmada en Telegram'], { cwd: ROOT, encoding: 'utf8' });
     return tgSend(cfg.token, chatId, r.status === 0 ? `🎉 ¡Excelente! Informe #${report} marcado como <b>Responded</b>.` : `No pude actualizar el tracker: ${esc((r.stderr || r.stdout).slice(0, 200))}`);
   }
+  if (action === 'mark_applied') {
+    setAppState(report, 'applied_manual');
+    const r = spawnSync('node', ['set-status.mjs', '--report', report, 'Applied', '--note', 'Enviada manualmente tras CAPTCHA (confirmado en Telegram)'], { cwd: ROOT, encoding: 'utf8' });
+    spawnSync('node', ['followup-seed.mjs', report], { cwd: ROOT, encoding: 'utf8' });
+    return tgSend(cfg.token, chatId, r.status === 0
+      ? `✅ <b>¡Genial! Candidatura #${report} marcada como Applied.</b>\nSeguimiento programado a los 7 y 14 días.`
+      : `No pude actualizar el tracker: ${esc((r.stderr || r.stdout).slice(0, 300))}`);
+  }
   if (action === 'discard') {
     setAppState(report, 'discarded');
     const r = spawnSync('node', ['set-status.mjs', '--report', report, 'Discarded', '--note', 'Descartada desde Telegram'], { cwd: ROOT, encoding: 'utf8' });
@@ -524,8 +553,17 @@ async function handleSubmit(report, chatId) {
       `El portal requiere verificación humana (Turnstile/reCAPTCHA). No te preocupes: todos tus datos y CV están listos.`,
       '',
       `👉 <a href="${esc(res.meta.url)}">Abre el formulario aquí</a> y pulsa enviar.`,
-      `Cuando la envíes escribe <code>/enviada ${report}</code>.`
-    ].join('\n'));
+      `Cuando la envíes, pulsa el botón abajo o responde <b>enviada</b>.`
+    ].join('\n'), {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '✅ Ya la he enviado', callback_data: `mark_applied:${report}` },
+            { text: '❌ Descartar', callback_data: `discard:${report}` }
+          ]
+        ]
+      }
+    });
   } else {
     await tgSend(cfg.token, chatId, [
       `⚠️ <b>No se pudo enviar automáticamente #${report} (${esc(res.meta.company)})</b>: ${esc(res.error || 'revisa los campos')}.`,
