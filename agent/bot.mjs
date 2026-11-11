@@ -99,7 +99,22 @@ export function pendingDecisions(minScore) {
     if (!(r.score >= minScore) || r.hardStops.length || /suspicious|sospechos/i.test(r.legitimacy)) continue;
     out.push({ ...r, num, appState });
   }
-  return out.sort((a, b) => b.score - a.score || Number(b.num) - Number(a.num));
+  // Same offer evaluated more than once: keep only the newest report.
+  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const newest = new Map();
+  for (const r of out) {
+    const key = r.url ? r.url.replace(/[?#].*$/, '').replace(/\/+$/, '') : `${norm(r.company)}|${norm(r.role)}`;
+    const key2 = `${norm(r.company)}|${norm(r.role)}`;
+    for (const k of [key, key2]) {
+      const prev = newest.get(k);
+      if (!prev || Number(r.num) > Number(prev.num)) newest.set(k, r);
+    }
+  }
+  const keep = new Set([...newest.values()].filter((r) => {
+    const key = r.url ? r.url.replace(/[?#].*$/, '').replace(/\/+$/, '') : `${norm(r.company)}|${norm(r.role)}`;
+    return newest.get(key) === r && newest.get(`${norm(r.company)}|${norm(r.role)}`) === r;
+  }));
+  return [...keep].sort((a, b) => b.score - a.score || Number(b.num) - Number(a.num));
 }
 
 const tierEmoji = (s) => (s >= 4.5 ? '🟢' : s >= 4.3 ? '🟡' : s >= 4.1 ? '🟠' : '🔴');
