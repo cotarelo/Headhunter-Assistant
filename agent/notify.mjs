@@ -148,6 +148,15 @@ function pendingCount() {
   } catch { return 0; }
 }
 
+// Score-based apply recommendation shown above the action buttons.
+export function recommendation(r) {
+  if (r.hardStops.length) return `⛔ <b>No recomendado:</b> tiene bloqueos (${tgEsc(r.hardStops[0])}).`;
+  if (r.score >= 4.5) return '🟢 <b>Recomendado: aplica.</b> Encaje muy alto.';
+  if (r.score >= 4.3) return '🟡 <b>Vale la pena aplicar</b>, revisa antes los gaps.';
+  if (r.score >= 4.1) return '🟠 <b>Dudoso:</b> aplica solo si te interesa especialmente.';
+  return '🔴 <b>No recomendado</b> aplicar.';
+}
+
 async function sendTelegramAlerts(hits) {
   const tg = tgConfig(ROOT);
   if (!tg.enabled) return;
@@ -159,9 +168,9 @@ async function sendTelegramAlerts(hits) {
       `🎯 <b>#${reportNum} ${tgEsc(r.company)}</b> — ${tgEsc(r.role)}`,
       `<b>${r.score.toFixed(1)}/5</b> · ${tgEsc(r.decision)} · ${tgEsc(r.archetype)}`,
       r.url ? `<a href="${tgEsc(r.url)}">Ver oferta</a>` : '',
-      r.strengths.length ? '\n✅ ' + r.strengths.map(tgEsc).join('\n✅ ') : '',
+      r.strengths.length ? '\n✅ ' + r.strengths.map(tgEsc).join(' · ') : '',
       r.gaps.length ? '\n⚠️ ' + r.gaps.map(tgEsc).join('\n⚠️ ') : '',
-      `\n<i>💡 Responde "apply" a este mensaje para enviar, o pulsa el botón abajo:</i>`,
+      `\n${recommendation(r)}`,
       `<i>reports/${tgEsc(r.file)}</i>`,
     ].filter(Boolean);
     await tgSend(tg.token, tg.chatId, lines.join('\n').slice(0, 4000), {
