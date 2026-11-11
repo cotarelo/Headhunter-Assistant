@@ -284,6 +284,7 @@ async function handle(msg) {
         '/estado — último ciclo y cola',
         '/top — mejores ofertas (7 días)',
         '/cola — próximas ofertas por evaluar',
+        '/preparar N — preparar CV, carta y formulario del informe N',
         '/enviar N — enviar candidatura automáticamente (1 clic)',
         '/carta N &lt;cambios&gt; — pedir a agy que modifique la carta',
         '/cv N &lt;cambios&gt; — pedir a agy que modifique el CV',
@@ -292,7 +293,7 @@ async function handle(msg) {
         '/contactado N [nota] — registrar seguimiento en LinkedIn/email',
         '',
         '💡 También puedes responder directamente a cualquier mensaje de carta o archivo de CV con los cambios que quieras.',
-        'Las ofertas con nota ≥ 3.8 te llegan aquí con su carta y formulario.',
+        `Las ofertas con nota ≥ ${process.env.ALERT_THRESHOLD || '4.0'} te llegan aquí; pulsa 🚀 Aplicar para preparar CV, carta y formulario.`,
       ].join('\n'));
   }
 }
