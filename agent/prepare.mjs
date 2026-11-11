@@ -6,6 +6,10 @@
  *   node prepare.mjs --report 105            # full: extract -> agy answers+CV -> fill+screenshot -> Telegram
  *   node prepare.mjs --report 105 --skip-agy # reuse existing answers.json (e.g. after manual edit)
  *   node prepare.mjs --report 105 --no-telegram
+ *   node prepare.mjs --report 105 --resend   # only re-send the copy-paste pack (CV, cover, answers) to Telegram
+ *
+ * The Telegram pack is built for manual copy-paste: CV PDF, cover letter and every form answer as tap-to-copy blocks.
+ * If the portal blocks the form (e.g. WTTJ/CloudFront 403), agy answers the usual portal questions instead.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -32,10 +36,13 @@ Inputs (read them): ${outRel}/form.json (the form fields, exact selectors), the 
 cv.md, config/profile.yml, modes/_profile.md (section "Standard Application Form Answers" is binding), modes/_custom.md.
 Tasks:
 1. Tailored CV PDF: if no output/cv-*.pdf exists for this report/company dated within 7 days, run the career-ops pdf mode for this report
-   (EM headline variant for EM/Head roles, PM variant for PM/TPM/Program roles; strictly max 2 pages, A4). Facts only from cv.md.
-   Follow modes/_custom.md: omit the Core Competencies section entirely (leave competencies empty/absent in the payload; do not render blue competency tags),
-   keep exactly 3 bullet points for each main experience entry, include Technical Product Owner in Earlier Roles as "Activision Blizzard (King)",
-   do not list leadership skills as certifications (keep them under Skills), and under Earlier Roles do not output a role title, location or dates in the header.
+   (EM headline variant for EM/Head roles, PM variant for PM/TPM/Program roles; A4, EXACTLY 2 pages, never 3). Facts only from cv.md.
+   Layout is binding (modes/_custom.md "CV formatting rules"):
+   - Page 1: header, professional summary and work experience. The longest-tenure role is the most developed one
+     (up to 5 bullets); the other main roles exactly 3 bullets; then "Earlier Roles" (no title, location or dates in its header;
+     Technical Product Owner listed as "Activision Blizzard (King)"). Everything on page 1 must fit page 1.
+   - Page break strictly before Education. Page 2: Education, Certifications (formal only), Skills (leadership/soft skills here), About Me.
+   - Omit the Core Competencies section entirely (no competencies in the payload, no blue blocks).
 2. Write ${outRel}/cover.txt: short, simple cover letter in English, 120-180 words, only cv.md facts, no invented metrics.
 3. Write ${outRel}/answers.json with EXACTLY this shape:
    {"cv_pdf":"<path relative to career-ops root>","cover_letter_file":"${outRel}/cover.txt",
@@ -118,57 +125,6 @@ async function fillForm(form, answers, out) {
   return result;
 }
 
-function summaryText(meta, answers, fill, report) {
-  const lines = [
-    `📝 <b>Candidatura preparada</b> (no enviada)`,
-    `<b>${esc(meta.company)}</b> — ${esc(meta.role)}`,
-    `Score <b>${meta.score?.toFixed?.(1)}</b>/5 · informe #${report}`,
-    '',
-    `📊 <b>Campos:</b> ${fill.filled.length} rellenados · ${fill.skipped.length + fill.errors.length} pendientes`,
-  ];
-
-  const reviewItems = (answers.answers || []).filter((a) => a.needs_review);
-  if (reviewItems.length > 0) {
-    lines.push('', `⚠️ <b>Requieren atención (${reviewItems.length}):</b>`);
-    for (const a of reviewItems) {
-      const v = a.value ? `<code>${esc(String(a.value).slice(0, 80))}</code>` : '<i>(en blanco)</i>';
-      lines.push(`• <b>${esc(a.label.slice(0, 80))}</b>\n   ↳ ${v}${a.note ? `\n   <i>${esc(a.note.slice(0, 120))}</i>` : ''}`);
-    }
-  }
-
-  const standardItems = (answers.answers || []).filter((a) => !a.needs_review && a.value && a.value !== false);
-  if (standardItems.length > 0) {
-    lines.push('', `✅ <b>Campos clave rellenados:</b>`);
-    let count = 0;
-    for (const a of standardItems) {
-      if (lines.join('\n').length > 2600) break;
-      const v = a.type === 'file' ? (a.value === 'cover' ? '📎 Carta de presentación' : '📎 CV adaptado') : String(a.value).slice(0, 70);
-      lines.push(`• <b>${esc(a.label.slice(0, 60))}:</b> ${esc(v)}`);
-      count++;
-    }
-    const remaining = standardItems.length - count;
-    if (remaining > 0) {
-      lines.push(`• <i>...y ${remaining} campos estándar más.</i>`);
-    }
-  }
-
-  if (fill.errors.length > 0) {
-    lines.push('', `❌ <b>Errores al rellenar:</b>\n${esc(fill.errors.slice(0, 3).join('\n'))}`);
-  }
-
-  lines.push(
-    '',
-    `👉 <a href="${esc(meta.url)}">Abrir oferta original</a>`,
-    `💡 Revisa el pantallazo adjunto. Puedes responder con <b>apply</b> / <b>enviar</b> o pulsar el botón abajo.`
-  );
-
-  let result = lines.join('\n');
-  if (result.length > 3800) {
-    result = result.slice(0, 3750) + '\n\n<i>[...resumen recortado...]</i>';
-  }
-  return result;
-}
-
 async function main() {
   const report = arg('--report');
   if (!report) throw new Error('--report N required');
@@ -176,8 +132,17 @@ async function main() {
   const outRel = path.join('output', 'applications', String(report).padStart(3, '0'));
   const out = ensureDir(path.join(ROOT, outRel));
 
+  if (has('--resend')) return sendPack(report, meta, outRel, out);
+
   log('1/4 extract form');
-  const { form } = await extractForm({ report, out });
+  let form;
+  try {
+    ({ form } = await extractForm({ report, out }));
+  } catch (e) {
+    log('   extract failed (continuing without form):', e.message);
+    form = { report: Number(report), company: meta.company, role: meta.role, posting_url: meta.url, form_url: meta.url, ats: 'unknown', fields: [], error: e.message };
+    fs.writeFileSync(path.join(out, 'form.json'), JSON.stringify(form, null, 2));
+  }
   log(`   ${form.ats} ${form.fields.length} fields`);
 
   if (!has('--skip-agy')) {
@@ -186,52 +151,98 @@ async function main() {
   }
   const answers = JSON.parse(fs.readFileSync(path.join(out, 'answers.json'), 'utf8'));
 
-  log('3/4 fill + screenshot (no submit)');
-  const fill = await fillForm(form, answers, out);
+  let fill = { filled: [], skipped: [], errors: [] };
+  if (form.fields.length && (answers.answers || []).some((a) => a.selector)) {
+    log('3/4 fill + screenshot (no submit)');
+    try { fill = await fillForm(form, answers, out); } catch (e) { log('   fill failed:', e.message); fill.errors.push(e.message.split('\n')[0]); }
+  } else log('3/4 fill skipped (no form fields)');
   fs.writeFileSync(path.join(out, 'fill-result.json'), JSON.stringify(fill, null, 2));
   log(`   filled=${fill.filled.length} skipped=${fill.skipped.length} errors=${fill.errors.length}`);
 
   const status = { report: Number(report), state: 'prepared', prepared_at: new Date().toISOString(), form_url: form.form_url };
   fs.writeFileSync(path.join(out, 'status.json'), JSON.stringify(status, null, 2));
 
+  if (has('--no-telegram')) { log('4/4 telegram skipped'); return; }
+  await sendPack(report, meta, outRel, out);
+}
+
+// ---------- copy-paste pack for Telegram ----------
+const COPY_INLINE_MAX = 120;
+
+function answerBlock(a) {
+  const label = esc(String(a.label || '').trim().slice(0, 120));
+  const warn = a.needs_review ? '⚠️ ' : '';
+  const note = a.needs_review && a.note ? `\n<i>${esc(String(a.note).slice(0, 160))}</i>` : '';
+  if (a.type === 'checkbox') return a.value === true ? `☑️ Marcar: <b>${label}</b>${note}` : null;
+  const v = a.value === undefined || a.value === null ? '' : String(a.value).trim();
+  if (!v) return `${warn}<b>${label}</b>\n<i>(en blanco — contéstala tú)</i>${note}`;
+  const body = v.length <= COPY_INLINE_MAX && !v.includes('\n') ? `<code>${esc(v)}</code>` : `<pre>${esc(v)}</pre>`;
+  return `${warn}<b>${label}</b>\n${body}${note}`;
+}
+
+function chunk(blocks, header, max = 3500) {
+  const msgs = [];
+  let cur = header;
+  for (const b of blocks) {
+    if ((cur + '\n\n' + b).length > max && cur !== header) { msgs.push(cur); cur = header.replace(/\)?<\/b>$/, ' (cont.)</b>'); }
+    cur += '\n\n' + b;
+  }
+  msgs.push(cur);
+  return msgs;
+}
+
+async function sendPack(report, meta, outRel, out) {
   const tg = tgConfig(ROOT);
-  if (has('--no-telegram') || !tg.enabled) { log('4/4 telegram skipped'); return; }
-  log('4/4 telegram');
-  await tgSendFile(tg.token, tg.chatId, path.join(out, 'form-filled.png'), { caption: `📸 <b>#${report} ${esc(meta.company)}</b> — ${esc(meta.role)}\nFormulario rellenado (sin enviar)`, kind: 'document' });
+  if (!tg.enabled) { log('4/4 telegram not configured'); return; }
+  log('4/4 telegram pack');
+  const read = (f) => { try { return JSON.parse(fs.readFileSync(path.join(out, f), 'utf8')); } catch { return null; } };
+  const answers = read('answers.json') || { answers: [] };
+  const form = read('form.json') || { fields: [] };
+  const canAuto = form.fields?.length > 0;
+  const send = (text, extra) => tgSend(tg.token, tg.chatId, text, extra);
+
+  await send([
+    `📦 <b>Candidatura lista para copiar — #${report} ${esc(meta.company)}</b>`,
+    esc(meta.role),
+    meta.url ? `👉 <a href="${esc(meta.url)}">Abrir oferta y aplicar</a>` : '',
+    canAuto ? '' : '<i>No he podido leer el formulario del portal: te paso las preguntas habituales. Si el portal pregunta algo más, respóndeme con la pregunta.</i>',
+  ].filter(Boolean).join('\n'));
+
   if (answers.cv_pdf && fs.existsSync(path.join(ROOT, answers.cv_pdf))) {
     await tgSendFile(tg.token, tg.chatId, path.join(ROOT, answers.cv_pdf), {
-      caption: `📄 <b>CV adaptado — #${report} (${esc(meta.company)})</b>\n\n<i>💡 Para modificar el CV, responde directamente a este archivo con tus cambios (ej: "enfoca más a SRE" o "resalta el proyecto de cloud en King").</i>`,
+      caption: `📄 <b>CV adaptado — #${report} (${esc(meta.company)})</b>\n<i>Para cambiarlo, responde a este archivo con lo que quieras (ej: "enfoca más a SRE").</i>`,
     });
   }
-  
-  if (fs.existsSync(path.join(out, 'cover.txt'))) {
-    const coverText = fs.readFileSync(path.join(out, 'cover.txt'), 'utf8').trim();
-    if (coverText) {
-      await tgSend(tg.token, tg.chatId, [
-        `✉️ <b>Carta de presentación — #${report} (${esc(meta.company)})</b>`,
-        '',
-        `<blockquote>${esc(coverText)}</blockquote>`,
-        '',
-        `<i>💡 Para modificarla, responde directamente a este mensaje con tus cambios (ej: "hazla más corta" o "enfatiza X").</i>`
-      ].join('\n'));
-    }
+
+  const coverText = (() => { try { return fs.readFileSync(path.join(out, 'cover.txt'), 'utf8').trim(); } catch { return ''; } })();
+  if (coverText) {
+    await send([
+      `✉️ <b>Carta de presentación — #${report} (${esc(meta.company)})</b>`,
+      '<i>Toca el bloque para copiarla.</i>',
+      `<pre>${esc(coverText)}</pre>`,
+      '<i>Para modificarla, responde a este mensaje con tus cambios.</i>',
+    ].join('\n'));
   }
 
-  await tgSend(tg.token, tg.chatId, summaryText(meta, answers, fill, report), {
+  const blocks = (answers.answers || []).filter((a) => a.type !== 'file').map(answerBlock).filter(Boolean);
+  if (blocks.length) {
+    const review = (answers.answers || []).filter((a) => a.needs_review && a.type !== 'file').length;
+    const header = `📝 <b>Respuestas del formulario — #${report}</b>\n<i>Toca cada valor para copiarlo.${review ? ` ⚠️ = revísala (${review}).` : ''}</i>`;
+    for (const m of chunk(blocks, header)) await send(m);
+  }
+
+  const row1 = [{ text: '✅ Ya la he enviado', callback_data: `mark_applied:${report}` }];
+  if (canAuto) row1.push({ text: '🤖 Probar envío automático', callback_data: `autosubmit:${report}` });
+  await send(`👆 Cuando la envíes, pulsa <b>Ya la he enviado</b> y programo el seguimiento a 7 y 14 días.`, {
     reply_markup: {
       inline_keyboard: [
-        [
-          { text: '🚀 Enviar candidatura', callback_data: `submit:${report}` },
-        ],
+        row1,
         [
           { text: '✏️ Cambiar carta', callback_data: `edit_cover:${report}` },
           { text: '📄 Cambiar CV', callback_data: `edit_cv:${report}` },
-        ],
-        [
-          { text: '📝 La envío yo', callback_data: `manual:${report}` },
           { text: '❌ Descartar', callback_data: `discard:${report}` },
-        ]
-      ]
+        ],
+      ],
     },
   });
 }

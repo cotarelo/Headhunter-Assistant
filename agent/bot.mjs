@@ -192,7 +192,7 @@ async function handle(msg) {
   if (text && !text.startsWith('/') && n) {
     const isApplyIntent = /^(?:apply|enviar|enviala|envíala|mándala|mandala|dale|adelante|si|sí|ok|procede|hazlo|confirmo|send|submit)\b/i.test(text.trim());
     if (isApplyIntent) {
-      return handleSubmit(n, chatId);
+      return handleApply(n, chatId);
     }
 
     const isAppliedIntent = /^(?:enviada|mandada|hecho|hecha|ya|lista|listo|done|aplicada|applied)\b/i.test(text.trim());
@@ -280,7 +280,7 @@ async function handle(msg) {
         '',
         ...body,
         all.length > MAX ? `\n<i>…y ${all.length - MAX} más. Decide estas y vuelve a escribir /pendientes.</i>` : '',
-        '\n<i>🚀 prepara/envía la candidatura · ❌ la descarta. Para bajar el corte: /pendientes 4.1</i>',
+        '\n<i>🚀 te manda CV, carta y respuestas para copiar · ❌ la descarta. Para bajar el corte: /pendientes 4.1</i>',
       ].filter(Boolean);
       const short = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
       return tgSend(cfg.token, chatId, lines.join('\n'), {
@@ -384,7 +384,7 @@ async function handle(msg) {
         '/cola — próximas ofertas por evaluar',
         '/pendientes [nota] — ofertas ≥ 4.3 (o la nota que digas) sin decidir, con botones',
         '/preparar N — preparar CV, carta y formulario del informe N',
-        '/enviar N — enviar candidatura automáticamente (1 clic)',
+        '/enviar N — intentar envío automático (experimental)',
         '/carta N &lt;cambios&gt; — pedir a agy que modifique la carta',
         '/cv N &lt;cambios&gt; — pedir a agy que modifique el CV',
         '/enviada N — marcar como Applied la candidatura del informe N',
@@ -392,7 +392,7 @@ async function handle(msg) {
         '/contactado N [nota] — registrar seguimiento en LinkedIn/email',
         '',
         '💡 También puedes responder directamente a cualquier mensaje de carta o archivo de CV con los cambios que quieras.',
-        `Las ofertas con nota ≥ ${process.env.ALERT_THRESHOLD || '4.0'} te llegan aquí; pulsa 🚀 Aplicar para preparar CV, carta y formulario.`,
+        `Las ofertas con nota ≥ ${process.env.ALERT_THRESHOLD || '4.0'} te llegan aquí; pulsa 🚀 Aplicar y te mando CV, carta y respuestas para copiar y pegar.`,
       ].join('\n'));
   }
 }
@@ -504,10 +504,11 @@ Rules:
 1. Strictly max 2 pages A4.
 2. Facts strictly from cv.md only. Never invent facts or metrics.
 3. Candidate contact email must be jorge.penacotarelo@gmail.com.
-4. Follow modes/_custom.md: omit the Core Competencies section entirely (leave competencies empty/absent in the payload; do not render blue competency blocks),
-   keep exactly 3 bullet points for each main experience entry, include Technical Product Owner in Earlier Roles as "Activision Blizzard (King)",
-   keep certifications strictly formal (leadership/soft skills belong under Skills),
-   and under Earlier Roles do not output a role title, location, or dates in the header.
+4. Follow modes/_custom.md "CV formatting rules" (binding): exactly 2 pages A4.
+   Page 1 = header, summary and work experience; the longest-tenure role is the most developed (up to 5 bullets), other main roles exactly 3 bullets,
+   then Earlier Roles (no title, location or dates in its header; Technical Product Owner as "Activision Blizzard (King)").
+   Page break strictly before Education. Page 2 = Education, Certifications (formal only), Skills (leadership/soft skills here), About Me.
+   Omit the Core Competencies section entirely (no competencies in the payload, no blue blocks).
 5. Generate the tailored HTML using build-cv-html.mjs and render the PDF using generate-pdf.mjs with --report=${report} --format=a4.
    Write the output PDF to output/cv-jorge-pena-cotarelo-${report}-${meta.company.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${today}.pdf (or similar path under output/).
 6. Update ${path.relative(ROOT, answersFile)}: set "cv_pdf" to the path of the new PDF relative to career-ops root.
@@ -617,7 +618,10 @@ async function handleCallback(cb) {
   const [action, report] = String(cb.data || '').split(':');
   if (!/^\d+$/.test(report || '')) return;
   if (action === 'submit') {
-    return handleSubmit(report, chatId);
+    return handleApply(report, chatId); // "🚀 Aplicar": copy-paste pack (CV + carta + respuestas)
+  }
+  if (action === 'autosubmit') {
+    return handleSubmit(report, chatId); // explicit opt-in to Playwright auto-submission
   }
   if (action === 'edit_cover') {
     return tgSend(cfg.token, chatId, `✍️ Para modificar la carta del informe #${report}, responde directamente al mensaje de la carta con tus cambios, o escribe:\n<code>/carta ${report} &lt;lo que quieras cambiar&gt;</code>`);
@@ -649,6 +653,24 @@ async function handleCallback(cb) {
     setAppState(report, 'discarded');
     const r = spawnSync('node', ['set-status.mjs', '--report', report, 'Discarded', '--note', 'Descartada desde Telegram'], { cwd: ROOT, encoding: 'utf8' });
     return tgSend(cfg.token, chatId, `❌ Informe #${report} descartado.${r.status === 0 ? '' : ' (no pude actualizar el tracker: ' + esc((r.stderr || r.stdout).slice(0, 200)) + ')'}`);
+  }
+}
+
+// "Aplicar": send the copy-paste pack. Reuses a previous preparation when it has answers; otherwise prepares from scratch.
+async function handleApply(report, chatId) {
+  let meta = {};
+  try { meta = parseReport(reportFile(report)); } catch { meta = { company: `Empresa #${report}`, role: '' }; }
+  let prepared = false;
+  try {
+    const a = JSON.parse(fs.readFileSync(path.join(appDir(report), 'answers.json'), 'utf8'));
+    prepared = (a.answers || []).length > 0 && !!a.cv_pdf;
+  } catch {}
+  const args = ['prepare.mjs', '--report', String(report)];
+  if (prepared) args.push('--resend');
+  else await tgSend(cfg.token, chatId, `⏳ <b>Preparando #${report} (${esc(meta.company)})...</b>\nCV adaptado, carta y respuestas del formulario para copiar y pegar (unos minutos en DietPi).`);
+  const prep = spawnSync('node', args, { cwd: HERE, encoding: 'utf8', timeout: 3600000 });
+  if (prep.status !== 0) {
+    return tgSend(cfg.token, chatId, `⚠️ Error al preparar #${report}: ${esc((prep.stderr || prep.stdout || '').slice(-300))}`);
   }
 }
 
