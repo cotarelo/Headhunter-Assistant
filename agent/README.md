@@ -42,6 +42,7 @@ Servicio `headhunter-bot@`. Solo obedece al chat emparejado con `/start`.
 | `/estado` | último ciclo y cola |
 | `/top` | mejores ofertas (7 días) |
 | `/cola` | próximas ofertas por evaluar |
+| `/pendientes [nota]` | ofertas ≥ 4.3 (o la nota indicada) sin decidir, con botones 🚀/❌; sin duplicados de re-evaluaciones |
 | `/preparar N` | preparar CV, carta y formulario del informe N |
 | `/enviar N` | enviar la candidatura (la prepara si hace falta) |
 | `/carta N <cambios>` / `/cv N <cambios>` | pedir a agy que modifique la carta o el CV |
