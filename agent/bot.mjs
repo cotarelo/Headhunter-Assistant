@@ -59,6 +59,51 @@ function recentReports(days = 7) {
     .sort((a, b) => (b.score || 0) - (a.score || 0));
 }
 
+// Tracker status by report number, from data/applications.md ("[165](../reports/165-...)").
+function trackerStatusByReport() {
+  const map = new Map();
+  try {
+    const lines = fs.readFileSync(path.join(ROOT, 'data', 'applications.md'), 'utf8').split('\n');
+    const header = lines.find((l) => /^\|\s*#\s*\|/.test(l));
+    if (!header) return map;
+    const cols = header.split('|').map((s) => s.trim().toLowerCase());
+    const iStatus = cols.indexOf('status');
+    const iReport = cols.indexOf('report');
+    for (const l of lines) {
+      const cells = l.split('|').map((s) => s.trim());
+      const m = (cells[iReport] || '').match(/reports\/0*(\d+)-/);
+      if (m) map.set(m[1], cells[iStatus] || '');
+    }
+  } catch {}
+  return map;
+}
+
+const DONE_APP_STATES = /^(discarded|applied|applied_manual|submitted)$/;
+
+// Evaluated offers >= minScore with no decision yet (not applied/discarded), best first.
+export function pendingDecisions(minScore) {
+  const dir = path.join(ROOT, 'reports');
+  const status = trackerStatusByReport();
+  const out = [];
+  for (const f of fs.readdirSync(dir)) {
+    const m = f.match(/^0*(\d+)-.+\.md$/);
+    if (!m || /RESERVED/i.test(f)) continue;
+    const num = m[1];
+    const st = status.get(num);
+    if (st && !/^evaluated$/i.test(st)) continue;
+    let appState = '';
+    try { appState = JSON.parse(fs.readFileSync(path.join(appDir(num), 'status.json'), 'utf8')).state || ''; } catch {}
+    if (DONE_APP_STATES.test(appState)) continue;
+    let r;
+    try { r = parseReport(path.join(dir, f)); } catch { continue; }
+    if (!(r.score >= minScore) || r.hardStops.length || /suspicious|sospechos/i.test(r.legitimacy)) continue;
+    out.push({ ...r, num, appState });
+  }
+  return out.sort((a, b) => b.score - a.score || Number(b.num) - Number(a.num));
+}
+
+const tierEmoji = (s) => (s >= 4.5 ? '🟢' : s >= 4.3 ? '🟡' : s >= 4.1 ? '🟠' : '🔴');
+
 function extractReportNumber(msg) {
   const text = (msg.text || '').trim();
   const explicitMatch = text.match(/^(?:apply|enviar|preparar|submit|mandar)\s+(\d+)\b/i);
@@ -194,6 +239,44 @@ async function handle(msg) {
         .map((l) => l.replace(/^- \[ \]\s*/, '').split('|').slice(1).map((s) => s.trim()).join(' — '));
       return tgSend(cfg.token, chatId, `<b>Cola:</b> ${all.length} pendientes.\nPróximas (España/remoto):\n${esc(es.join('\n')) || '—'}`);
     }
+    case '/pendientes': {
+      const arg = text.split(/\s+/)[1];
+      const min = arg && /^\d+(?:[.,]\d+)?$/.test(arg) ? Number(arg.replace(',', '.')) : 4.3;
+      const MAX = 15;
+      const all = pendingDecisions(min);
+      if (!all.length) return tgSend(cfg.token, chatId, `No hay ofertas ≥ ${min} pendientes de decidir. 🎉`);
+      const shown = all.slice(0, MAX);
+      const ago = (d) => {
+        const t = Date.parse(d);
+        if (isNaN(t)) return '';
+        const days = Math.floor((Date.now() - t) / 864e5);
+        return days <= 0 ? ' · hoy' : ` · hace ${days} d`;
+      };
+      const body = shown.map((r) => {
+        const role = r.url ? `<a href="${esc(r.url)}">${esc(r.role)}</a>` : esc(r.role);
+        const prep = r.appState === 'prepared' ? ' · 📝 preparada' : r.appState === 'manual_pending' ? ' · ✋ la envías tú' : '';
+        return `${tierEmoji(r.score)} <b>${r.score.toFixed(1)}</b> · #${r.num} <b>${esc(r.company)}</b> — ${role}<i>${ago(r.date)}${prep}</i>`;
+      });
+      const counts = [['🟢', 4.5, 99], ['🟡', 4.3, 4.5], ['🟠', 4.1, 4.3]]
+        .map(([e, lo, hi]) => [e, all.filter((r) => r.score >= lo && r.score < hi).length])
+        .filter(([, c]) => c).map(([e, c]) => `${e} ${c}`).join(' · ');
+      const lines = [
+        `📥 <b>Pendientes de decidir: ${all.length}</b> (≥ ${min}) — ${counts}`,
+        '',
+        ...body,
+        all.length > MAX ? `\n<i>…y ${all.length - MAX} más. Decide estas y vuelve a escribir /pendientes.</i>` : '',
+        '\n<i>🚀 prepara/envía la candidatura · ❌ la descarta. Para bajar el corte: /pendientes 4.1</i>',
+      ].filter(Boolean);
+      const short = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+      return tgSend(cfg.token, chatId, lines.join('\n'), {
+        reply_markup: {
+          inline_keyboard: shown.map((r) => [
+            { text: `🚀 #${r.num} ${short(r.company, 18)} (${r.score.toFixed(1)})`, callback_data: `submit:${r.num}` },
+            { text: '❌', callback_data: `discard:${r.num}` },
+          ]),
+        },
+      });
+    }
     case '/enviada': {
       const n = text.split(/\s+/)[1];
       if (!/^\d+$/.test(n || '')) return tgSend(cfg.token, chatId, 'Uso: /enviada <nº informe>');
@@ -284,6 +367,7 @@ async function handle(msg) {
         '/estado — último ciclo y cola',
         '/top — mejores ofertas (7 días)',
         '/cola — próximas ofertas por evaluar',
+        '/pendientes [nota] — ofertas ≥ 4.3 (o la nota que digas) sin decidir, con botones',
         '/preparar N — preparar CV, carta y formulario del informe N',
         '/enviar N — enviar candidatura automáticamente (1 clic)',
         '/carta N &lt;cambios&gt; — pedir a agy que modifique la carta',
@@ -660,4 +744,4 @@ async function main() {
     }
   }
 }
-main();
+if (process.argv[1] === fileURLToPath(import.meta.url)) main();
