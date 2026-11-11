@@ -1,6 +1,6 @@
 # Headhunter Assistant
 
-Agente 24x7 para búsqueda, evaluación y preparación asistida de candidaturas laborales usando [career-ops](https://github.com/career-ops-hq/career-ops) y Antigravity CLI (`agy`).
+Agente 24x7 para búsqueda, evaluación y aplicación asistida a ofertas de empleo usando [career-ops](https://github.com/career-ops-hq/career-ops) y Antigravity CLI (`agy`). Avisa por email y Telegram, y solo prepara/envía candidaturas cuando las apruebas desde Telegram.
 
 ## Arquitectura
 
