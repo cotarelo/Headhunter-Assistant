@@ -31,8 +31,8 @@ Cada oferta llega con puntos fuertes, gaps, una recomendación según el score y
 ## Aplicación asistida (bot de Telegram, `bot.mjs`)
 Servicio `headhunter-bot@`. Solo obedece al chat emparejado con `/start`.
 
-1. **Preparar** (`prepare.mjs`): al pulsar *Aplicar* (o `/preparar N`), genera CV y carta adaptados y extrae el formulario. Puedes pedir cambios respondiendo al mensaje de la carta o del CV.
-2. **Enviar** (`submit.mjs`): rellena y envía el formulario con Playwright. Si hay CAPTCHA o un campo que no sabe rellenar, te avisa para que lo termines tú y lo marques con *Ya la he enviado* / `enviada`.
+1. **Aplicar → paquete para copiar y pegar** (`prepare.mjs`): al pulsar *🚀 Aplicar* (o `/preparar N`) te llegan el CV adaptado (2 páginas: experiencia en la 1ª, educación en la 2ª), la carta y cada respuesta del formulario como bloque que se copia al tocarlo. Si el portal bloquea la lectura del formulario (p. ej. Welcome to the Jungle), recibes las preguntas habituales (datos, salario, incorporación, autorización de trabajo, motivación, encaje). Si ya estaba preparada, pulsar *Aplicar* reenvía el paquete sin gastar agy.
+2. **Envío automático (experimental, opcional)** (`submit.mjs`): botón *🤖 Probar envío automático* o `/enviar N`, solo si se pudo leer el formulario. Si hay CAPTCHA, te avisa para que lo termines tú.
 3. **Seguimiento** (`lib/followup.mjs`): recordatorios a los 7 y 14 días de enviar la candidatura.
 
 **Nada se envía sin tu confirmación explícita en Telegram.**
@@ -44,7 +44,7 @@ Servicio `headhunter-bot@`. Solo obedece al chat emparejado con `/start`.
 | `/cola` | próximas ofertas por evaluar |
 | `/pendientes [nota]` | ofertas ≥ 4.3 (o la nota indicada) sin decidir, con botones 🚀/❌; sin duplicados de re-evaluaciones |
 | `/preparar N` | preparar CV, carta y formulario del informe N |
-| `/enviar N` | enviar la candidatura (la prepara si hace falta) |
+| `/enviar N` | intentar envío automático (experimental) |
 | `/carta N <cambios>` / `/cv N <cambios>` | pedir a agy que modifique la carta o el CV |
 | `/enviada N` | marcar como Applied |
 | `/seguimiento` | estado y recordatorios a 7/14 días |
