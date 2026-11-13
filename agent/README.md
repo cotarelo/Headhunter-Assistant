@@ -14,11 +14,17 @@ Timer `headhunter-cycle@`: a las 08:15, 12:15, 16:15, 20:15 y 00:15 (±10 min). 
 2. `agy -p "Run career-ops pipeline mode…"`: triaje + evaluación A–G de como máximo `MAX_EVALS_PER_CYCLE` ofertas → `reports/`
 3. `node merge-tracker.mjs` → `data/applications.md`
 4. `node agent/notify.mjs`: alerta por email y Telegram de las ofertas nuevas con score ≥ `ALERT_THRESHOLD` (4.0)
+5. **Paquete para n8n**: para cada oferta nueva con score ≥ `AUTO_PACK_THRESHOLD` (4.7) y sin bloqueos, prepara (o reutiliza) CV y carta con `prepare.mjs --no-telegram` y envía un **email aparte** con asunto `[HH-APPLY] #N Empresa — Rol (score)` y adjuntos:
+   - `CV_<Nombre>_<Empresa>.pdf`, `Cover_Letter_<Nombre>_<Empresa>.pdf` y `.txt`
+   - `application.json`: `job_url`, `form_url`, `ats`, datos del candidato, carta y respuestas del formulario (`needs_review` marca las dudosas)
+   - Cabeceras `X-Headhunter-Report`, `X-Headhunter-Score`, `X-Headhunter-Job-Url`
+
+   Si falla, se reintenta en los 2 ciclos siguientes. Manual: `node notify.mjs --pack N`. Estado en `data/headhunter-notify-state.json` → `packs`.
 
 Además, timer `headhunter-digest@`: resumen diario a las 21:00 (señal de que el agente sigue vivo) y recordatorios de seguimiento.
 
 ## Alertas de Telegram
-Cada oferta llega con puntos fuertes, gaps, una recomendación según el score y dos botones (**🚀 Aplicar** / **❌ Descartar**):
+Cada oferta llega con puntos fuertes, gaps, una recomendación según el score y tres botones (**🚀 Aplicar** / **❌ Descartar** / **✅ Ya he aplicado**). *Ya he aplicado* sirve cuando aplicas por otra vía (p. ej. Nod/n8n): marca la oferta como Applied y programa los recordatorios de seguimiento por LinkedIn a 7 y 14 días desde hoy. También aparece como **✅ Ya** en `/pendientes`.
 
 | Score | Recomendación |
 |---|---|
@@ -35,7 +41,7 @@ Servicio `headhunter-bot@`. Solo obedece al chat emparejado con `/start`.
 2. **Envío automático (experimental, opcional)** (`submit.mjs`): botón *🤖 Probar envío automático* o `/enviar N`, solo si se pudo leer el formulario. Si hay CAPTCHA, te avisa para que lo termines tú.
 3. **Seguimiento** (`lib/followup.mjs`): recordatorios a los 7 y 14 días de enviar la candidatura.
 
-**Nada se envía sin tu confirmación explícita en Telegram.**
+**Nada se envía sin tu confirmación explícita en Telegram** (salvo que conectes un flujo de n8n a los emails `[HH-APPLY]`: este repo solo envía el paquete, no aplica).
 
 | Comando | Qué hace |
 |---|---|

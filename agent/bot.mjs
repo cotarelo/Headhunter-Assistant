@@ -280,13 +280,14 @@ async function handle(msg) {
         '',
         ...body,
         all.length > MAX ? `\n<i>…y ${all.length - MAX} más. Decide estas y vuelve a escribir /pendientes.</i>` : '',
-        '\n<i>🚀 te manda CV, carta y respuestas para copiar · ❌ la descarta. Para bajar el corte: /pendientes 4.1</i>',
+        '\n<i>🚀 te manda CV, carta y respuestas para copiar · ✅ ya aplicada (seguimiento a 7/14 días) · ❌ la descarta. Para bajar el corte: /pendientes 4.1</i>',
       ].filter(Boolean);
       const short = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
       return tgSend(cfg.token, chatId, lines.join('\n'), {
         reply_markup: {
           inline_keyboard: shown.map((r) => [
             { text: `🚀 #${r.num} ${short(r.company, 18)} (${r.score.toFixed(1)})`, callback_data: `submit:${r.num}` },
+            { text: '✅ Ya', callback_data: `mark_applied:${r.num}` },
             { text: '❌', callback_data: `discard:${r.num}` },
           ]),
         },
@@ -605,6 +606,7 @@ End with: cv_ready=true`;
 function appDir(report) { return path.join(ROOT, 'output', 'applications', String(report).padStart(3, '0')); }
 function setAppState(report, state, extra = {}) {
   const f = path.join(appDir(report), 'status.json');
+  fs.mkdirSync(appDir(report), { recursive: true }); // may not exist if applied without /preparar (e.g. via Nod)
   let st = {}; try { st = JSON.parse(fs.readFileSync(f, 'utf8')); } catch {}
   Object.assign(st, { state, [`${state}_at`]: new Date().toISOString() }, extra);
   fs.writeFileSync(f, JSON.stringify(st, null, 2));
@@ -643,10 +645,11 @@ async function handleCallback(cb) {
   }
   if (action === 'mark_applied') {
     setAppState(report, 'applied_manual');
-    const r = spawnSync('node', ['set-status.mjs', '--report', report, 'Applied', '--note', 'Enviada manualmente tras CAPTCHA (confirmado en Telegram)'], { cwd: ROOT, encoding: 'utf8' });
-    spawnSync('node', ['followup-seed.mjs', report], { cwd: ROOT, encoding: 'utf8' });
+    const r = spawnSync('node', ['set-status.mjs', '--report', report, 'Applied', '--note', 'Ya aplicada por Jorge (confirmado en Telegram)'], { cwd: ROOT, encoding: 'utf8' });
+    // count 7/14 days from today, not from the evaluation date (the tracker's default)
+    spawnSync('node', ['followup-seed.mjs', report, '--date', new Date().toISOString().slice(0, 10), '--force'], { cwd: ROOT, encoding: 'utf8' });
     return tgSend(cfg.token, chatId, r.status === 0
-      ? `✅ <b>¡Genial! Candidatura #${report} marcada como Applied.</b>\nSeguimiento programado a los 7 y 14 días.`
+      ? `✅ <b>Candidatura #${report} marcada como Applied.</b>\nSi no responden, te aviso a los 7 y 14 días para hacer seguimiento por LinkedIn.`
       : `No pude actualizar el tracker: ${esc((r.stderr || r.stdout).slice(0, 300))}`);
   }
   if (action === 'discard') {

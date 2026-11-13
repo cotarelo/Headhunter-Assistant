@@ -114,9 +114,9 @@ function offerText(r) {
   ].filter(Boolean).join('\n');
 }
 
-async function send(subject, html, text) {
+async function send(subject, html, text, { to, attachments = [], headers } = {}) {
   if (DRY) {
-    log('DRY-RUN — would send:', subject);
+    log('DRY-RUN — would send:', subject, attachments.length ? `(+${attachments.length} attachments: ${attachments.map((a) => a.filename).join(', ')})` : '');
     console.log(text);
     return;
   }
@@ -133,10 +133,12 @@ async function send(subject, html, text) {
   });
   await transport.sendMail({
     from: process.env.MAIL_FROM || process.env.SMTP_USER,
-    to: process.env.MAIL_TO,
+    to: to || process.env.MAIL_TO,
     subject,
     text,
     html: `<div style="font-family:sans-serif">${html}</div>`,
+    attachments,
+    headers,
   });
   log('sent:', subject);
 }
@@ -179,12 +181,122 @@ async function sendTelegramAlerts(hits) {
           [
             { text: '🚀 Aplicar a esta oferta', callback_data: `submit:${reportNum}` },
             { text: '❌ Descartar', callback_data: `discard:${reportNum}` }
+          ],
+          [
+            { text: '✅ Ya he aplicado (seguimiento)', callback_data: `mark_applied:${reportNum}` }
           ]
         ]
       } : undefined
     });
   }
   log(`telegram: ${hits.length} alert(s) sent`);
+}
+
+// ---------- application pack (CV + cover letter) for n8n auto-apply ----------
+// Offers scoring >= PACK_THRESHOLD (and with no hard stops) get a separate email with the tailored CV,
+// the cover letter (PDF + txt) and application.json, so an n8n workflow can apply automatically.
+const PACK_THRESHOLD = Number(process.env.AUTO_PACK_THRESHOLD || 4.7);
+const PACK_SUBJECT_TAG = process.env.PACK_SUBJECT_TAG || '[HH-APPLY]';
+const PACK_MAX_ATTEMPTS = 3;
+const reportNum = (file) => ((file.match(/^(\d+)-/) || [])[1] || '').replace(/^0+/, '');
+const packEligible = (r) => r.score >= PACK_THRESHOLD && !r.hardStops.length && !/suspicious|sospechos/i.test(r.legitimacy);
+const safeName = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40);
+
+function readPrepared(num) {
+  const dir = path.join(ROOT, 'output', 'applications', String(num).padStart(3, '0'));
+  const json = (f) => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { return null; } };
+  const answers = json('answers.json');
+  const cover = (() => { try { return fs.readFileSync(path.join(dir, 'cover.txt'), 'utf8').trim(); } catch { return ''; } })();
+  const cvPath = answers?.cv_pdf ? path.join(ROOT, answers.cv_pdf) : '';
+  const ok = !!(cvPath && fs.existsSync(cvPath) && cover);
+  return { dir, ok, answers, cover, cvPath, form: json('form.json') };
+}
+
+/** Reuses an existing preparation, otherwise runs prepare.mjs (agy) without the Telegram pack. */
+function ensurePrepared(num) {
+  let p = readPrepared(num);
+  if (p.ok) return p;
+  log(`pack #${num}: preparing CV + cover letter (agy)…`);
+  const r = spawnSync('node', [path.join(HERE, 'prepare.mjs'), '--report', String(num), '--no-telegram'], {
+    cwd: HERE, encoding: 'utf8', timeout: Number(process.env.AGY_TIMEOUT_SECONDS || 3600) * 1000, maxBuffer: 64 * 1024 * 1024,
+  });
+  p = readPrepared(num);
+  if (!p.ok) throw new Error(`prepare failed (exit ${r.status}): ${String(r.stderr || r.stdout || '').trim().slice(-300)}`);
+  return p;
+}
+
+function candidate() {
+  try { return yaml.load(fs.readFileSync(path.join(ROOT, 'config', 'profile.yml'), 'utf8'))?.candidate || {}; } catch { return {}; }
+}
+
+async function sendPack(r) {
+  const num = reportNum(r.file);
+  if (!num) throw new Error(`no report number in ${r.file}`);
+  if (DRY) { log(`DRY-RUN — would prepare and email application pack for #${num} ${r.company} (${r.score})`); return; }
+  const p = ensurePrepared(num);
+  const c = candidate();
+  const who = safeName(c.full_name || 'Jorge Pena');
+  const co = safeName(r.company);
+
+  const attachments = [{ filename: `CV_${who}_${co}.pdf`, path: p.cvPath, contentType: 'application/pdf' }];
+  const coverPdf = path.join(p.dir, 'cover-letter.pdf');
+  let coverPdfName = null;
+  try {
+    const { coverToPdf } = await import('./lib/cover-pdf.mjs');
+    await coverToPdf(ROOT, p.cover, coverPdf, { name: c.full_name || '' });
+    coverPdfName = `Cover_Letter_${who}_${co}.pdf`;
+    attachments.push({ filename: coverPdfName, path: coverPdf, contentType: 'application/pdf' });
+  } catch (e) { log(`pack #${num}: cover PDF failed (txt only): ${e.message}`); }
+  const coverTxtName = `Cover_Letter_${who}_${co}.txt`;
+  attachments.push({ filename: coverTxtName, content: p.cover, contentType: 'text/plain; charset=utf-8' });
+
+  const app = {
+    report: Number(num), company: r.company, role: r.role, score: r.score,
+    job_url: r.url, form_url: p.form?.form_url || r.url, ats: p.form?.ats || 'unknown',
+    candidate: { full_name: c.full_name || '', email: 'jorge.penacotarelo@gmail.com', phone: c.phone || '', linkedin: c.linkedin || '', location: c.location || '' },
+    files: { cv: attachments[0].filename, cover_letter_pdf: coverPdfName, cover_letter_txt: coverTxtName },
+    cover_letter: p.cover,
+    answers: (p.answers?.answers || []).filter((a) => a.type !== 'file').map(({ label, value, type, needs_review, note }) => ({ label, value, type, needs_review: !!needs_review, note: note || '' })),
+    warnings: p.answers?.warnings || [],
+    generated_at: new Date().toISOString(),
+  };
+  attachments.push({ filename: 'application.json', content: JSON.stringify(app, null, 2), contentType: 'application/json' });
+
+  const review = app.answers.filter((a) => a.needs_review).length;
+  const subject = `${PACK_SUBJECT_TAG} #${num} ${r.company} — ${r.role} (${r.score.toFixed(1)})`;
+  const html = `<p><b>Paquete de candidatura listo</b> (score ≥ ${PACK_THRESHOLD}): CV adaptado, carta de presentación y <code>application.json</code> adjuntos.</p>
+    ${offerHtml(r)}
+    <h4>Carta de presentación</h4><pre style="white-space:pre-wrap;font-family:inherit">${esc(p.cover)}</pre>
+    ${review ? `<p style="color:#b60">⚠️ ${review} respuesta(s) marcadas para revisar en application.json.</p>` : ''}`;
+  const text = [`${subject}`, `Job URL: ${r.url}`, `Form URL: ${app.form_url}`, '', 'COVER LETTER:', p.cover].join('\n');
+  await send(subject, html, text, {
+    to: process.env.PACK_MAIL_TO || process.env.MAIL_TO,
+    attachments,
+    headers: { 'X-Headhunter-Report': num, 'X-Headhunter-Score': String(r.score), 'X-Headhunter-Job-Url': r.url || '' },
+  });
+}
+
+/** Sends packs for new eligible hits and retries failed ones from previous cycles. Mutates state.packs. */
+async function runPacks(state, hits) {
+  state.packs ||= {};
+  const todo = new Map();
+  for (const r of hits.filter(packEligible)) if (!state.packs[r.file]) todo.set(r.file, r);
+  for (const [file, s] of Object.entries(state.packs)) {
+    if (s.status === 'failed' && s.attempts < PACK_MAX_ATTEMPTS && !todo.has(file) && fs.existsSync(path.join(REPORTS, file))) {
+      try { const r = parseReport(path.join(REPORTS, file)); if (packEligible(r)) todo.set(file, r); } catch {}
+    }
+  }
+  for (const [file, r] of todo) {
+    const prev = state.packs[file] || { attempts: 0 };
+    try {
+      await sendPack(r);
+      if (!DRY) state.packs[file] = { status: 'sent', attempts: prev.attempts + 1, at: new Date().toISOString() };
+    } catch (e) {
+      log(`pack ${file} failed:`, e.message);
+      if (!DRY) state.packs[file] = { status: 'failed', attempts: prev.attempts + 1, at: new Date().toISOString(), error: e.message.slice(0, 300) };
+    }
+    saveState(state);
+  }
 }
 
 // ---------- modes ----------
@@ -199,7 +311,7 @@ async function runAlerts() {
   }
   const seen = new Set(state.notified);
   const fresh = files.filter((f) => !seen.has(f));
-  if (!fresh.length) { log('no new reports.'); return; }
+  if (!fresh.length) { log('no new reports.'); await runPacks(state, []); return; }
 
   const parsed = fresh.map((f) => { try { return parseReport(path.join(REPORTS, f)); } catch (e) { log('parse error', f, e.message); return null; } }).filter(Boolean);
   const hits = parsed
@@ -224,6 +336,8 @@ async function runAlerts() {
   state.notified = [...seen, ...fresh];
   state.lastAlertRun = new Date().toISOString();
   saveState(state);
+  // after alerts are recorded: packs may take minutes (agy) and must not delay or duplicate alerts
+  await runPacks(state, hits);
 }
 
 async function runDigest() {
@@ -253,6 +367,13 @@ async function main() {
     return;
   }
   if (DIGEST) return runDigest();
+  const packIdx = process.argv.indexOf('--pack');
+  if (packIdx > 0) { // manual: node notify.mjs --pack 123  (send the CV + cover letter pack for one report now)
+    const n = process.argv[packIdx + 1];
+    const file = listReports().find((f) => reportNum(f) === String(Number(n)));
+    if (!file) throw new Error(`report ${n} not found`);
+    return sendPack(parseReport(path.join(REPORTS, file)));
+  }
   return runAlerts();
 }
 
