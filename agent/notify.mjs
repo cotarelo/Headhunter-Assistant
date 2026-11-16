@@ -192,9 +192,9 @@ async function sendTelegramAlerts(hits) {
   log(`telegram: ${hits.length} alert(s) sent`);
 }
 
-// ---------- application pack (CV + cover letter) for n8n auto-apply ----------
-// Offers scoring >= PACK_THRESHOLD (and with no hard stops) get a separate email with the tailored CV,
-// the cover letter (PDF + txt) and application.json, so an n8n workflow can apply automatically.
+// ---------- application pack (CV + cover letter) for n8n/Nod auto-apply ----------
+// Offers scoring >= PACK_THRESHOLD (and with no hard stops) carry, inside the alert email itself, the tailored CV,
+// the cover letter (PDF + txt) and <N>_application.json, so Nod/n8n can apply. Subject is prefixed with PACK_SUBJECT_TAG.
 const PACK_THRESHOLD = Number(process.env.AUTO_PACK_THRESHOLD || 4.7);
 const PACK_SUBJECT_TAG = process.env.PACK_SUBJECT_TAG || '[HH-APPLY]';
 const PACK_MAX_ATTEMPTS = 3;
@@ -229,73 +229,116 @@ function candidate() {
   try { return yaml.load(fs.readFileSync(path.join(ROOT, 'config', 'profile.yml'), 'utf8'))?.candidate || {}; } catch { return {}; }
 }
 
-async function sendPack(r) {
+/** Prepares (or reuses) CV + cover letter for one offer and returns its email attachments. Throws if preparation fails. */
+async function buildPack(r) {
   const num = reportNum(r.file);
   if (!num) throw new Error(`no report number in ${r.file}`);
-  if (DRY) { log(`DRY-RUN — would prepare and email application pack for #${num} ${r.company} (${r.score})`); return; }
   const p = ensurePrepared(num);
   const c = candidate();
   const who = safeName(c.full_name || 'Jorge Pena');
   const co = safeName(r.company);
+  const base = `${num}_`; // filenames prefixed with the report number: several offers can share one email
 
-  const attachments = [{ filename: `CV_${who}_${co}.pdf`, path: p.cvPath, contentType: 'application/pdf' }];
+  const cvName = `${base}CV_${who}_${co}.pdf`;
+  const attachments = [{ filename: cvName, path: p.cvPath, contentType: 'application/pdf' }];
   const coverPdf = path.join(p.dir, 'cover-letter.pdf');
   let coverPdfName = null;
   try {
     const { coverToPdf } = await import('./lib/cover-pdf.mjs');
     await coverToPdf(ROOT, p.cover, coverPdf, { name: c.full_name || '' });
-    coverPdfName = `Cover_Letter_${who}_${co}.pdf`;
+    coverPdfName = `${base}Cover_Letter_${who}_${co}.pdf`;
     attachments.push({ filename: coverPdfName, path: coverPdf, contentType: 'application/pdf' });
   } catch (e) { log(`pack #${num}: cover PDF failed (txt only): ${e.message}`); }
-  const coverTxtName = `Cover_Letter_${who}_${co}.txt`;
+  const coverTxtName = `${base}Cover_Letter_${who}_${co}.txt`;
   attachments.push({ filename: coverTxtName, content: p.cover, contentType: 'text/plain; charset=utf-8' });
 
   const app = {
     report: Number(num), company: r.company, role: r.role, score: r.score,
     job_url: r.url, form_url: p.form?.form_url || r.url, ats: p.form?.ats || 'unknown',
     candidate: { full_name: c.full_name || '', email: 'jorge.penacotarelo@gmail.com', phone: c.phone || '', linkedin: c.linkedin || '', location: c.location || '' },
-    files: { cv: attachments[0].filename, cover_letter_pdf: coverPdfName, cover_letter_txt: coverTxtName },
+    files: { cv: cvName, cover_letter_pdf: coverPdfName, cover_letter_txt: coverTxtName },
     cover_letter: p.cover,
     answers: (p.answers?.answers || []).filter((a) => a.type !== 'file').map(({ label, value, type, needs_review, note }) => ({ label, value, type, needs_review: !!needs_review, note: note || '' })),
     warnings: p.answers?.warnings || [],
     generated_at: new Date().toISOString(),
   };
-  attachments.push({ filename: 'application.json', content: JSON.stringify(app, null, 2), contentType: 'application/json' });
+  const jsonName = `${base}application.json`;
+  attachments.push({ filename: jsonName, content: JSON.stringify(app, null, 2), contentType: 'application/json' });
+  return { r, num, app, attachments, cover: p.cover, files: [cvName, coverPdfName, coverTxtName, jsonName].filter(Boolean) };
+}
 
-  const review = app.answers.filter((a) => a.needs_review).length;
-  const subject = `${PACK_SUBJECT_TAG} #${num} ${r.company} — ${r.role} (${r.score.toFixed(1)})`;
-  const html = `<p><b>Paquete de candidatura listo</b> (score ≥ ${PACK_THRESHOLD}): CV adaptado, carta de presentación y <code>application.json</code> adjuntos.</p>
-    ${offerHtml(r)}
-    <h4>Carta de presentación</h4><pre style="white-space:pre-wrap;font-family:inherit">${esc(p.cover)}</pre>
-    ${review ? `<p style="color:#b60">⚠️ ${review} respuesta(s) marcadas para revisar en application.json.</p>` : ''}`;
-  const text = [`${subject}`, `Job URL: ${r.url}`, `Form URL: ${app.form_url}`, '', 'COVER LETTER:', p.cover].join('\n');
-  await send(subject, html, text, {
-    to: process.env.PACK_MAIL_TO || process.env.MAIL_TO,
-    attachments,
-    headers: { 'X-Headhunter-Report': num, 'X-Headhunter-Score': String(r.score), 'X-Headhunter-Job-Url': r.url || '' },
+/** HTML shown right under the offer card when its CV + cover letter are attached. */
+function packHtml(pk) {
+  const review = pk.app.answers.filter((a) => a.needs_review).length;
+  return `<div style="border-left:4px solid #2a7;padding:4px 12px;margin:-4px 0 16px;font-family:sans-serif">
+    <p style="margin:4px 0"><b>📎 Adjuntos #${pk.num}:</b> ${pk.files.map((f) => `<code>${esc(f)}</code>`).join(' · ')}</p>
+    <p style="margin:4px 0">Formulario: ${pk.app.form_url ? `<a href="${esc(pk.app.form_url)}">${esc(pk.app.form_url)}</a>` : '—'}</p>
+    <b>Carta de presentación</b><pre style="white-space:pre-wrap;font-family:inherit;margin:4px 0">${esc(pk.cover)}</pre>
+    ${review ? `<p style="color:#b60;margin:4px 0">⚠️ ${review} respuesta(s) marcadas para revisar en ${esc(pk.files.at(-1))}.</p>` : ''}
+  </div>`;
+}
+function packText(pk) {
+  return [`ATTACHMENTS #${pk.num}: ${pk.files.join(', ')}`, `Form URL: ${pk.app.form_url}`, 'COVER LETTER:', pk.cover].join('\n');
+}
+
+/**
+ * Builds packs for the eligible offers (skipping ones already sent) and records failures for retry.
+ * Returns Map(file -> pack). DRY-RUN never runs agy.
+ */
+async function buildPacks(state, offers) {
+  state.packs ||= {};
+  const packs = new Map();
+  for (const r of offers.filter(packEligible)) {
+    if (state.packs[r.file]?.status === 'sent') continue;
+    if (DRY) { log(`DRY-RUN — would prepare and attach CV + cover letter for ${r.file} (${r.score})`); continue; }
+    try { packs.set(r.file, await buildPack(r)); } catch (e) {
+      log(`pack ${r.file} failed:`, e.message);
+      const prev = state.packs[r.file] || { attempts: 0 };
+      state.packs[r.file] = { status: 'failed', attempts: prev.attempts + 1, at: new Date().toISOString(), error: e.message.slice(0, 300) };
+      saveState(state);
+    }
+  }
+  return packs;
+}
+
+function markPacks(state, packs, status, error) {
+  if (DRY) return;
+  for (const file of packs.keys()) {
+    const prev = state.packs[file] || { attempts: 0 };
+    state.packs[file] = { status, attempts: prev.attempts + 1, at: new Date().toISOString(), ...(error ? { error: String(error).slice(0, 300) } : {}) };
+  }
+  saveState(state);
+}
+
+/** One email with the offer cards and, under each eligible one, its CV + cover letter attached. */
+async function sendOffersEmail(subject, intro, offers, packs) {
+  const html = `<p>${intro}</p>${offers.map((r) => offerHtml(r) + (packs.has(r.file) ? packHtml(packs.get(r.file)) : '')).join('')}
+    <p style="color:#888;font-size:12px">Headhunter agent · ${packs.size ? `CV y carta adjuntos para ${packs.size} oferta(s) ≥ ${PACK_THRESHOLD} · ` : ''}nada se ha enviado ni aplicado en tu nombre.</p>`;
+  const text = offers.map((r) => offerText(r) + (packs.has(r.file) ? '\n\n' + packText(packs.get(r.file)) : '')).join('\n\n---\n\n');
+  const attachments = [...packs.values()].flatMap((pk) => pk.attachments);
+  const headers = packs.size ? { 'X-Headhunter-Reports': [...packs.values()].map((pk) => pk.num).join(',') } : undefined;
+  await send(packs.size ? `${PACK_SUBJECT_TAG} 📎 ${subject}` : subject, html, text, {
+    to: packs.size ? (process.env.PACK_MAIL_TO || process.env.MAIL_TO) : undefined, attachments, headers,
   });
 }
 
-/** Sends packs for new eligible hits and retries failed ones from previous cycles. Mutates state.packs. */
-async function runPacks(state, hits) {
-  state.packs ||= {};
-  const todo = new Map();
-  for (const r of hits.filter(packEligible)) if (!state.packs[r.file]) todo.set(r.file, r);
-  for (const [file, s] of Object.entries(state.packs)) {
-    if (s.status === 'failed' && s.attempts < PACK_MAX_ATTEMPTS && !todo.has(file) && fs.existsSync(path.join(REPORTS, file))) {
-      try { const r = parseReport(path.join(REPORTS, file)); if (packEligible(r)) todo.set(file, r); } catch {}
+/** Standalone email for one offer (manual --pack N, and retries of failed packs). */
+async function sendPack(r) {
+  if (DRY) { log(`DRY-RUN — would prepare and email CV + cover letter for ${r.file} (${r.score})`); return; }
+  const pk = await buildPack(r);
+  await sendOffersEmail(`#${pk.num} ${r.company} — ${r.role} (${r.score.toFixed(1)})`, 'CV adaptado y carta de presentación adjuntos:', [r], new Map([[r.file, pk]]));
+}
+
+/** Retries packs that failed in previous cycles (up to PACK_MAX_ATTEMPTS), each as a standalone email. */
+async function retryFailedPacks(state) {
+  for (const [file, s] of Object.entries(state.packs || {})) {
+    if (s.status !== 'failed' || s.attempts >= PACK_MAX_ATTEMPTS || !fs.existsSync(path.join(REPORTS, file))) continue;
+    let r; try { r = parseReport(path.join(REPORTS, file)); } catch { continue; }
+    if (!packEligible(r)) continue;
+    try { await sendPack(r); markPacks(state, new Map([[file, null]]), 'sent'); } catch (e) {
+      log(`pack retry ${file} failed:`, e.message);
+      markPacks(state, new Map([[file, null]]), 'failed', e.message);
     }
-  }
-  for (const [file, r] of todo) {
-    const prev = state.packs[file] || { attempts: 0 };
-    try {
-      await sendPack(r);
-      if (!DRY) state.packs[file] = { status: 'sent', attempts: prev.attempts + 1, at: new Date().toISOString() };
-    } catch (e) {
-      log(`pack ${file} failed:`, e.message);
-      if (!DRY) state.packs[file] = { status: 'failed', attempts: prev.attempts + 1, at: new Date().toISOString(), error: e.message.slice(0, 300) };
-    }
-    saveState(state);
   }
 }
 
@@ -309,25 +352,31 @@ async function runAlerts() {
     log(`baseline recorded: ${files.length} existing reports marked as seen (no email).`);
     return;
   }
+  state.packs ||= {};
   const seen = new Set(state.notified);
   const fresh = files.filter((f) => !seen.has(f));
-  if (!fresh.length) { log('no new reports.'); await runPacks(state, []); return; }
+  if (!fresh.length) { log('no new reports.'); await retryFailedPacks(state); return; }
 
   const parsed = fresh.map((f) => { try { return parseReport(path.join(REPORTS, f)); } catch (e) { log('parse error', f, e.message); return null; } }).filter(Boolean);
   const hits = parsed
     .filter((r) => r.score >= THRESHOLD && !/suspicious|sospechos/i.test(r.legitimacy))
     .sort((a, b) => b.score - a.score);
-  log(`${fresh.length} new reports, ${hits.length} >= ${THRESHOLD}.`);
+  log(`${fresh.length} new reports, ${hits.length} >= ${THRESHOLD}, ${hits.filter(packEligible).length} >= ${PACK_THRESHOLD} (CV + carta).`);
 
   if (hits.length) {
+    const errors = [];
+    // Telegram first: it is instant, while preparing CV + cover letter (agy) can take minutes per offer.
+    try { await sendTelegramAlerts(hits); } catch (e) { errors.push(`telegram: ${e.message}`); }
+    const packs = await buildPacks(state, hits);
     const subject = `🎯 ${hits.length} oferta${hits.length > 1 ? 's' : ''} ≥ ${THRESHOLD}: ` +
       hits.slice(0, 3).map((r) => `${r.company} (${r.score.toFixed(1)})`).join(', ');
-    const html = `<p>Nuevas ofertas con alto encaje:</p>${hits.map(offerHtml).join('')}
-      <p style="color:#888;font-size:12px">Headhunter agent · nada se ha enviado ni aplicado en tu nombre.</p>`;
-    const text = hits.map(offerText).join('\n\n---\n\n');
-    const errors = [];
-    try { await send(subject, html, text); } catch (e) { errors.push(`email: ${e.message}`); }
-    try { await sendTelegramAlerts(hits); } catch (e) { errors.push(`telegram: ${e.message}`); }
+    try {
+      await sendOffersEmail(subject, 'Nuevas ofertas con alto encaje:', hits, packs);
+      markPacks(state, packs, 'sent');
+    } catch (e) {
+      errors.push(`email: ${e.message}`);
+      markPacks(state, packs, 'failed', e.message); // resent on their own next cycle
+    }
     const tgOn = tgConfig(ROOT).enabled;
     // retry next cycle only if every configured channel failed
     if (errors.length && (errors.length >= (tgOn ? 2 : 1))) throw new Error(errors.join(' | '));
@@ -336,8 +385,32 @@ async function runAlerts() {
   state.notified = [...seen, ...fresh];
   state.lastAlertRun = new Date().toISOString();
   saveState(state);
-  // after alerts are recorded: packs may take minutes (agy) and must not delay or duplicate alerts
-  await runPacks(state, hits);
+  await retryFailedPacks(state);
+}
+
+/** One-off: CV + cover letter emails for undecided offers >= min that never got them (batches of BATCH). */
+async function runBackfill(min) {
+  const BATCH = Number(process.env.PACK_BACKFILL_BATCH || 5);
+  const state = loadState() || { notified: listReports() };
+  state.packs ||= {};
+  const { pendingDecisions } = await import('./bot.mjs');
+  const todo = pendingDecisions(min)
+    .map((x) => { try { return parseReport(path.join(REPORTS, listReports().find((f) => reportNum(f) === String(Number(x.num))))); } catch { return null; } })
+    .filter((r) => r && packEligible(r) && state.packs[r.file]?.status !== 'sent')
+    .sort((a, b) => b.score - a.score);
+  log(`backfill: ${todo.length} undecided offer(s) >= ${Math.max(min, PACK_THRESHOLD)} without CV + carta${DRY ? ' (dry-run)' : ''}.`);
+  for (let i = 0; i < todo.length; i += BATCH) {
+    const batch = todo.slice(i, i + BATCH);
+    const packs = await buildPacks(state, batch);
+    const offers = batch.filter((r) => packs.has(r.file));
+    if (!offers.length) continue;
+    const subject = `${offers.length} candidatura${offers.length > 1 ? 's' : ''} pendiente${offers.length > 1 ? 's' : ''} (${i / BATCH + 1}/${Math.ceil(todo.length / BATCH)}): ` +
+      offers.slice(0, 3).map((r) => `${r.company} (${r.score.toFixed(1)})`).join(', ');
+    try {
+      await sendOffersEmail(subject, `Ofertas ≥ ${PACK_THRESHOLD} ya notificadas y sin decidir, ahora con CV adaptado y carta adjuntos:`, offers, packs);
+      markPacks(state, packs, 'sent');
+    } catch (e) { log('backfill email failed:', e.message); markPacks(state, packs, 'failed', e.message); }
+  }
 }
 
 async function runDigest() {
@@ -367,6 +440,11 @@ async function main() {
     return;
   }
   if (DIGEST) return runDigest();
+  const bfIdx = process.argv.indexOf('--backfill');
+  if (bfIdx > 0) { // one-off: node notify.mjs --backfill [min]  (CV + carta for undecided offers >= min, default PACK_THRESHOLD)
+    const n = Number(process.argv[bfIdx + 1]);
+    return runBackfill(Number.isFinite(n) && n > 0 ? n : PACK_THRESHOLD);
+  }
   const packIdx = process.argv.indexOf('--pack');
   if (packIdx > 0) { // manual: node notify.mjs --pack 123  (send the CV + cover letter pack for one report now)
     const n = process.argv[packIdx + 1];
