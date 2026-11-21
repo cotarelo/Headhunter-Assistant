@@ -97,7 +97,7 @@ function cvTask() {
    Layout is binding (modes/_custom.md "CV formatting rules"):
    - Page 1: header, professional summary and work experience. The longest-tenure role is the most developed one
      (up to 5 bullets); the other main roles exactly 3 bullets; then "Earlier Roles" (no title, location or dates in its header;
-     Technical Product Owner listed as "Activision Blizzard (King)"). Everything on page 1 must fit page 1.
+     Product Owner listed as "Activision Blizzard (King)"). Everything on page 1 must fit page 1.
    - Page break strictly before Education. Page 2: Education, Certifications (formal only), Skills (leadership/soft skills here), About Me.
    - Omit the Core Competencies section entirely (no competencies in the payload, no blue blocks).`;
 }

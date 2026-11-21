@@ -507,7 +507,7 @@ Rules:
 3. Candidate contact email must be jorge.penacotarelo@gmail.com.
 4. Follow modes/_custom.md "CV formatting rules" (binding): exactly 2 pages A4.
    Page 1 = header, summary and work experience; the longest-tenure role is the most developed (up to 5 bullets), other main roles exactly 3 bullets,
-   then Earlier Roles (no title, location or dates in its header; Technical Product Owner as "Activision Blizzard (King)").
+   then Earlier Roles (no title, location or dates in its header; Product Owner as "Activision Blizzard (King)").
    Page break strictly before Education. Page 2 = Education, Certifications (formal only), Skills (leadership/soft skills here), About Me.
    Omit the Core Competencies section entirely (no competencies in the payload, no blue blocks).
 5. Generate the tailored HTML using build-cv-html.mjs and render the PDF using generate-pdf.mjs with --report=${report} --format=a4.
