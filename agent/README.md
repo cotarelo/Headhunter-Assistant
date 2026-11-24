@@ -13,7 +13,7 @@ Timer `headhunter-cycle@`: a las 08:15, 12:15, 16:15, 20:15 y 00:15 (±10 min). 
 1. `node scan.mjs`: escaneo sin coste de tokens (empresas, Manfred, WTTJ, Landing.jobs) → `data/pipeline.md`
 2. `agy -p "Run career-ops pipeline mode…"`: triaje + evaluación A–G de como máximo `MAX_EVALS_PER_CYCLE` ofertas → `reports/`
 3. `node merge-tracker.mjs` → `data/applications.md`
-4. `node agent/notify.mjs`: alerta por email y Telegram de las ofertas nuevas con score ≥ `ALERT_THRESHOLD` (4.0)
+4. `node agent/notify.mjs`: alerta por email y Telegram de las ofertas nuevas con score ≥ `ALERT_THRESHOLD` (4.0), o ≥ `SWISS_ALERT_THRESHOLD` (4.5) para reubicación en Suiza (solo grandes empresas, híbrido/remoto)
 5. **CV y carta adjuntos (para Nod/n8n)**: para cada oferta nueva con score ≥ `AUTO_PACK_THRESHOLD` (4.7) y sin bloqueos, prepara (o reutiliza) CV y carta con `prepare.mjs --no-telegram` y los **adjunta al propio email de alerta** (Telegram sale antes, sin esperar a agy). El asunto lleva el prefijo `[HH-APPLY] 📎` y, por cada oferta (nombres con el nº de informe delante, porque un email puede llevar varias):
    - `<N>_CV_<Nombre>_<Empresa>.pdf`, `<N>_Cover_Letter_<Nombre>_<Empresa>.pdf` y `.txt`
    - `<N>_application.json`: `job_url`, `form_url`, `ats`, datos del candidato, carta y respuestas del formulario (`needs_review` marca las dudosas)

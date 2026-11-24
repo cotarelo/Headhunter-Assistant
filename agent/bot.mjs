@@ -16,7 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { tgConfig, tgCall, tgSend, tgSendFile, esc } from './lib/telegram.mjs';
-import { parseReport } from './notify.mjs';
+import { parseReport, alertThresholdFor } from './notify.mjs';
 import { spawnSync } from 'node:child_process';
 import { submitApplication } from './submit.mjs';
 import { getFollowupData, checkAndSendFollowupAlerts, recordFollowupDone } from './lib/followup.mjs';
@@ -96,7 +96,8 @@ export function pendingDecisions(minScore) {
     if (DONE_APP_STATES.test(appState)) continue;
     let r;
     try { r = parseReport(path.join(dir, f)); } catch { continue; }
-    if (!(r.score >= minScore) || r.hardStops.length || /suspicious|sospechos/i.test(r.legitimacy)) continue;
+    const bar = r.swissRelocation ? Math.max(minScore, alertThresholdFor(r)) : minScore;
+    if (!(r.score >= bar) || r.hardStops.length || /suspicious|sospechos/i.test(r.legitimacy)) continue;
     out.push({ ...r, num, appState });
   }
   // Same offer evaluated more than once: keep only the newest report.

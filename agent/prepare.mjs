@@ -30,8 +30,11 @@ const arg = (k) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : un
 const has = (k) => argv.includes(k);
 const log = (...a) => console.log(`[prepare ${new Date().toISOString()}]`, ...a);
 
-function agyAnswers(report, outRel, today, noForm = false) {
-  const prompt = noForm ? noFormPrompt(report, outRel, today) : `You are preparing (NOT submitting) a job application for career-ops report ${report}.
+function agyAnswers(report, outRel, today, noForm = false, swiss = false) {
+  const salaryRule = swiss
+    ? 'Salary: THIS IS A SWITZERLAND RELOCATION ROLE — do NOT enter €75,000. Leave value "" and needs_review=true with note "Switzerland relocation — confirm CHF market expectation".'
+    : 'Salary: 75000 (number fields) or "€75,000 gross/year" (text). Never below 65000.';
+  const prompt = noForm ? noFormPrompt(report, outRel, today, swiss) : `You are preparing (NOT submitting) a job application for career-ops report ${report}.
 This is an UNATTENDED headless run. Never submit, apply, click Apply, send emails or messages.
 Inputs (read them): ${outRel}/form.json (the form fields, exact selectors), the report file reports/${String(report).padStart(3, '0')}-*.md,
 cv.md, config/profile.yml, modes/_profile.md (section "Standard Application Form Answers" is binding), modes/_custom.md.
@@ -46,7 +49,7 @@ ${cvTask()}
    - One entry per form.json field. For checkbox use true/false. For file fields use "cv" (resume) or "cover" (cover letter).
    - Candidate email: always use jorge.penacotarelo@gmail.com (never hotmail).
    - Start date: application date is ${today}; answer = ${today} + 1 day + 15 days, written as a concrete date plus "(15 days notice)".
-   - Salary: 75000 (number fields) or "€75,000 gross/year" (text). Never below 65000.
+   - ${salaryRule}
    - Diversity/EEO/disability/gender/ethnicity: "Prefer not to say" (or the closest option) and needs_review=false.
    - Referral/connection questions: answer that Jorge knows nobody at the company, needs_review=true (he may know someone).
    - Privacy/consent checkboxes required to apply: true, needs_review=true.
@@ -63,7 +66,7 @@ End with one line: answers_ready=<true|false>.`;
 }
 
 // Prompt used when the portal form could not be read (blocked/undetected): only job-specific, free-text answers.
-function noFormPrompt(report, outRel, today) {
+function noFormPrompt(report, outRel, today, swiss = false) {
   const rep = String(report).padStart(3, '0');
   return `You are preparing (NOT submitting) a job application for career-ops report ${report}. Jorge will paste the answers into the portal by hand.
 This is an UNATTENDED headless run. Never submit, apply, send emails or messages. Do not browse the portal (it is blocked).
@@ -80,8 +83,8 @@ ${cvTask()}
    "answers" MUST contain at least these questions (name, email, phone, LinkedIn, location, salary, start date, travel and EEO are added automatically, skip them):
    - "Current company" and "Current job title" (from cv.md)
    - "Years of relevant experience"
-   - "Work authorization for <job country>" (per modes/_profile.md; EU vs UK/US/non-EU rules)
-   - "Willing to relocate / work model" (hybrid Barcelona, remote Spain, or freelance/contractor; say if the job's location fits)
+   - "Work authorization for <job country>" (per modes/_profile.md; EU vs Switzerland EU/EFTA B-permit vs UK/US/non-EU rules)
+   - "Willing to relocate / work model" (${swiss ? 'open to relocating to Switzerland for hybrid/remote roles at established companies; studied MSc at University of Bern & interned at Swisscom' : 'hybrid Barcelona, remote Spain, or freelance/contractor; say if the job\'s location fits'})
    - "Why do you want to work at <company>?" (60-90 words, specific to the company and product, needs_review=true)
    - "Why are you a good fit for this role?" (60-90 words, cv.md proof points only, needs_review=true)
    - every explicit application question you find in the report or job description.
@@ -103,13 +106,13 @@ function cvTask() {
 }
 
 // Deterministic answers to the questions every portal asks (config/profile.yml + modes/_profile.md rules).
-function standardAnswers(today) {
+function standardAnswers(today, swiss = false) {
   let c = {};
   try { c = yaml.load(fs.readFileSync(path.join(ROOT, 'config', 'profile.yml'), 'utf8'))?.candidate || {}; } catch {}
   const [first, ...rest] = String(c.full_name || '').split(/\s+/);
   const start = new Date(Date.parse(today) + 16 * 864e5).toISOString().slice(0, 10);
   const li = c.linkedin ? (/^https?:/.test(c.linkedin) ? c.linkedin : `https://${c.linkedin}`) : '';
-  const q = (label, value, source = 'profile') => ({ selector: '', type: 'text', label, value, source, needs_review: false, note: '' });
+  const q = (label, value, source = 'profile', needs_review = false, note = '') => ({ selector: '', type: 'text', label, value, source, needs_review, note });
   return [
     q('First name', first || ''),
     q('Last name', rest.join(' ')),
@@ -117,11 +120,13 @@ function standardAnswers(today) {
     q('Phone', c.phone || ''),
     q('LinkedIn', li),
     q('Location', c.location || ''),
-    q('Salary expectation', '€75,000 gross/year', 'standard'),
+    swiss
+      ? q('Salary expectation', '', 'standard', true, 'Switzerland relocation — confirm CHF market expectation')
+      : q('Salary expectation', '€75,000 gross/year', 'standard'),
     q('Start date / notice period', `${start} (15 days notice)`, 'standard'),
     q('Willing to travel', 'Yes', 'standard'),
     q('Gender / ethnicity / disability (EEO)', 'Prefer not to say', 'standard'),
-  ].filter((a) => a.value);
+  ].filter((a) => a.value || a.needs_review);
 }
 
 async function fillForm(form, answers, out) {
@@ -205,13 +210,13 @@ async function main() {
   if (!has('--skip-agy')) {
     log('2/4 agy: CV + cover + answers');
     fs.rmSync(path.join(out, 'answers.json'), { force: true }); // never let agy copy a stale answer file
-    agyAnswers(report, outRel, today, form.fields.length === 0);
+    agyAnswers(report, outRel, today, form.fields.length === 0, !!meta.swissRelocation);
   }
   const answers = JSON.parse(fs.readFileSync(path.join(out, 'answers.json'), 'utf8'));
   if (!form.fields.length) {
     // Portal not readable: prepend deterministic standard answers to agy's job-specific ones.
     const seen = new Set((answers.answers || []).map((a) => String(a.label).toLowerCase()));
-    answers.answers = [...standardAnswers(today).filter((a) => !seen.has(a.label.toLowerCase())), ...(answers.answers || [])];
+    answers.answers = [...standardAnswers(today, !!meta.swissRelocation).filter((a) => !seen.has(a.label.toLowerCase())), ...(answers.answers || [])];
     fs.writeFileSync(path.join(out, 'answers.json'), JSON.stringify(answers, null, 2));
   }
 
