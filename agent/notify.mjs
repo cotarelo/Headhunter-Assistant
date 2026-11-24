@@ -36,6 +36,13 @@ const ROOT = path.resolve(HERE, process.env.CAREER_OPS_DIR || '../career-ops');
 const REPORTS = path.join(ROOT, 'reports');
 const STATE_FILE = path.join(ROOT, 'data', 'headhunter-notify-state.json');
 const THRESHOLD = Number(process.env.ALERT_THRESHOLD || 4.0);
+const SWISS_THRESHOLD = Number(process.env.SWISS_ALERT_THRESHOLD || 4.5);
+const SWISS_RE = /\b(switzerland|schweiz|suisse|zurich|zürich|geneva|genève|basel|lausanne|bern|zug|baar)\b/i;
+const SPAIN_LOCAL_RE = /\b(barcelona|spain|españa|catalonia|cataluña|remote\s+(?:eu|emea|europe|worldwide|global))\b/i;
+
+export function alertThresholdFor(r) {
+  return r?.swissRelocation ? Math.max(THRESHOLD, SWISS_THRESHOLD) : THRESHOLD;
+}
 
 function log(...a) { console.log(`[notify ${new Date().toISOString()}]`, ...a); }
 
@@ -53,6 +60,9 @@ export function parseReport(file) {
   const scoreRaw = summary.score ?? (field('Score').match(/([\d.]+)/) || [])[1];
   const score = scoreRaw !== undefined && scoreRaw !== '' ? Number(scoreRaw) : NaN;
   const [tCompany, ...tRole] = title.split(/\s+[—-]\s+/);
+  const locationFit = field('Location / contract fit') || field('Location') || (text.match(/^Location:\s*(.+)$/mi) || [])[1] || '';
+  const locProbe = locationFit || text.split('\n').slice(0, 25).join(' ');
+  const swissRelocation = SWISS_RE.test(locProbe) && (/relocat|reubic/i.test(locProbe) || !SPAIN_LOCAL_RE.test(locProbe));
   return {
     file: path.basename(file),
     company: summary.company || tCompany || '?',
@@ -60,6 +70,8 @@ export function parseReport(file) {
     score,
     url: field('URL'),
     date: field('Date'),
+    locationFit,
+    swissRelocation,
     archetype: summary.archetype || field('Archetype'),
     legitimacy: summary.legitimacy_tier || field('Legitimacy'),
     decision: summary.final_decision || field('Decision'),
@@ -94,7 +106,7 @@ function offerHtml(r) {
   const li = (arr) => arr.length ? `<ul>${arr.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '<p>—</p>';
   return `
   <div style="border:1px solid #ddd;border-radius:8px;padding:12px 16px;margin:12px 0;font-family:sans-serif">
-    <h3 style="margin:0 0 4px">${esc(r.company)} — ${esc(r.role)}</h3>
+    <h3 style="margin:0 0 4px">${r.swissRelocation ? '🇨🇭 ' : ''}${esc(r.company)} — ${esc(r.role)}</h3>
     <p style="margin:0 0 8px"><b>Score: ${isNaN(r.score) ? '?' : r.score.toFixed(1)}/5</b> · ${esc(r.decision)} · ${esc(r.archetype)} · Legitimidad: ${esc(r.legitimacy)}</p>
     ${r.url ? `<p><a href="${esc(r.url)}">Ver oferta</a></p>` : ''}
     <b>Puntos fuertes</b>${li(r.strengths)}
@@ -167,7 +179,7 @@ async function sendTelegramAlerts(hits) {
     const numMatch = r.file.match(/^(\d+)-/);
     const reportNum = numMatch ? numMatch[1].replace(/^0+/, '') : '';
     const lines = [
-      `🎯 <b>#${reportNum} ${tgEsc(r.company)}</b> — ${tgEsc(r.role)}`,
+      `🎯 ${r.swissRelocation ? '🇨🇭 ' : ''}<b>#${reportNum} ${tgEsc(r.company)}</b> — ${tgEsc(r.role)}`,
       `<b>${r.score.toFixed(1)}/5</b> · ${tgEsc(r.decision)} · ${tgEsc(r.archetype)}`,
       r.url ? `<a href="${tgEsc(r.url)}">Ver oferta</a>` : '',
       r.strengths.length ? '\n✅ ' + r.strengths.map(tgEsc).join(' · ') : '',
@@ -359,9 +371,9 @@ async function runAlerts() {
 
   const parsed = fresh.map((f) => { try { return parseReport(path.join(REPORTS, f)); } catch (e) { log('parse error', f, e.message); return null; } }).filter(Boolean);
   const hits = parsed
-    .filter((r) => r.score >= THRESHOLD && !/suspicious|sospechos/i.test(r.legitimacy))
+    .filter((r) => r.score >= alertThresholdFor(r) && !/suspicious|sospechos/i.test(r.legitimacy))
     .sort((a, b) => b.score - a.score);
-  log(`${fresh.length} new reports, ${hits.length} >= ${THRESHOLD}, ${hits.filter(packEligible).length} >= ${PACK_THRESHOLD} (CV + carta).`);
+  log(`${fresh.length} new reports, ${hits.length} passed alert bar (>= ${THRESHOLD}, CH >= ${SWISS_THRESHOLD}), ${hits.filter(packEligible).length} >= ${PACK_THRESHOLD} (CV + carta).`);
 
   if (hits.length) {
     const errors = [];

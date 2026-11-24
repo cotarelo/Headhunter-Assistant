@@ -51,7 +51,7 @@ if [ "$SKIP_EVAL" != "1" ] && [ "$PENDING" -gt 0 ]; then
 Run the career-ops pipeline mode for data/pipeline.md.
 This is an UNATTENDED headless run: nobody can answer, follow modes/_shared.md "Unattended runs".
 Process AT MOST ${MAX_EVALS} pending URLs in this run. Prioritise roles located in Barcelona or elsewhere in Spain,
-then remote EU/EMEA/worldwide roles; leave the rest pending for the next run. Use the two-pass triage.
+then remote EU/EMEA/worldwide roles and Switzerland (big/established companies, hybrid or remote only); leave the rest pending for the next run. Use the two-pass triage.
 Hard rules: never apply, submit, send emails or messages, and never click Apply. Do not edit cv.md, config/,
 modes/_profile.md, modes/_custom.md, modes/_brief.md or portals.yml.
 Tooling rules (permissions are pre-approved only for these; anything else is auto-denied and aborts the run):
