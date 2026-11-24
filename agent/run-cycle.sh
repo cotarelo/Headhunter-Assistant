@@ -35,6 +35,28 @@ fi
 cd "$CAREER_OPS_DIR" || { log "CAREER_OPS_DIR not found: $CAREER_OPS_DIR"; exit 1; }
 log "=== cycle start (max_evals=$MAX_EVALS) ==="
 
+# 0) deferred Switzerland activation (releases held filter + queued Swiss offers on/after SWISS_START_DATE)
+if [ -n "${SWISS_START_DATE:-}" ] && [[ ! "$(date +%F)" < "$SWISS_START_DATE" ]]; then
+  if grep -q '# CH-HOLD: ' portals.yml 2>/dev/null; then
+    sed -i.bak 's/# CH-HOLD: //' portals.yml && rm -f portals.yml.bak
+    log "released Switzerland location_filter in portals.yml (>= $SWISS_START_DATE)"
+  fi
+  if [ -s data/pipeline-swiss-hold.md ]; then
+    node -e '
+      const fs = require("fs");
+      const held = fs.readFileSync("data/pipeline-swiss-hold.md", "utf8").trim();
+      let p = fs.readFileSync("data/pipeline.md", "utf8");
+      if (held) {
+        p = /^## Pending/m.test(p)
+          ? p.replace(/^(## Pending[^\n]*\n+)/m, "$1" + held + "\n")
+          : held + "\n" + p;
+        fs.writeFileSync("data/pipeline.md", p);
+      }
+      fs.unlinkSync("data/pipeline-swiss-hold.md");
+    ' >>"$LOG" 2>&1 && log "released held Swiss offers into data/pipeline.md (>= $SWISS_START_DATE)"
+  fi
+fi
+
 # 1) zero-token scan
 if node scan.mjs --quiet >>"$LOG" 2>&1; then
   log "scan ok"
