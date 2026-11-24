@@ -13,13 +13,13 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { openForm } from './lib/form.mjs';
 import { tgConfig, tgSend, tgSendFile, esc } from './lib/telegram.mjs';
 import { reportFile } from './extract-form.mjs';
 import { parseReport } from './notify.mjs';
+import { setStatusAndSeed } from './lib/followup.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(HERE, '.env') });
@@ -227,8 +227,7 @@ export async function submitApplication(report, { dryRun = false } = {}) {
     if (isSuccess) {
       log('submission confirmed!');
       setAppState(report, 'applied_auto', { applied_at: new Date().toISOString() });
-      spawnSync('node', ['set-status.mjs', '--report', String(report), 'Applied', '--note', 'Enviada automáticamente (1-clic Telegram)'], { cwd: ROOT, encoding: 'utf8' });
-      spawnSync('node', ['followup-seed.mjs', String(report)], { cwd: ROOT, encoding: 'utf8' });
+      setStatusAndSeed(ROOT, report, 'Enviada automáticamente (1-clic Telegram)');
       return { ok: true, meta, screenshot: resultScreenshot };
     }
 
@@ -246,8 +245,7 @@ export async function submitApplication(report, { dryRun = false } = {}) {
     // If ambiguous (no explicit error, but no explicit success text):
     log('submission completed (ambiguous confirmation, marked applied with review)');
     setAppState(report, 'applied_auto', { applied_at: new Date().toISOString(), review_recommended: true });
-    spawnSync('node', ['set-status.mjs', '--report', String(report), 'Applied', '--note', 'Enviada (confirmación visual en Telegram)'], { cwd: ROOT, encoding: 'utf8' });
-    spawnSync('node', ['followup-seed.mjs', String(report)], { cwd: ROOT, encoding: 'utf8' });
+    setStatusAndSeed(ROOT, report, 'Enviada (confirmación visual en Telegram)');
     return { ok: true, meta, screenshot: resultScreenshot, ambiguous: true };
 
   } finally {

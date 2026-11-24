@@ -19,7 +19,14 @@ import { tgConfig, tgCall, tgSend, tgSendFile, esc } from './lib/telegram.mjs';
 import { parseReport } from './notify.mjs';
 import { spawnSync } from 'node:child_process';
 import { submitApplication } from './submit.mjs';
-import { getFollowupData, checkAndSendFollowupAlerts, recordFollowupDone } from './lib/followup.mjs';
+import {
+  getFollowupData,
+  checkAndSendFollowupAlerts,
+  recordFollowupDone,
+  findTrackerRow,
+  setTrackerStatus,
+  setStatusAndSeed,
+} from './lib/followup.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(HERE, '.env') });
@@ -198,11 +205,10 @@ async function handle(msg) {
     const isAppliedIntent = /^(?:enviada|mandada|hecho|hecha|ya|lista|listo|done|aplicada|applied)\b/i.test(text.trim());
     if (isAppliedIntent) {
       setAppState(n, 'applied_manual');
-      const r = spawnSync('node', ['set-status.mjs', '--report', n, 'Applied', '--note', 'Enviada manualmente (confirmado en Telegram por respuesta)'], { cwd: ROOT, encoding: 'utf8' });
-      spawnSync('node', ['followup-seed.mjs', n], { cwd: ROOT, encoding: 'utf8' });
-      return tgSend(cfg.token, chatId, r.status === 0
+      const r = setStatusAndSeed(ROOT, n, 'Enviada manualmente (confirmado en Telegram por respuesta)');
+      return tgSend(cfg.token, chatId, r.ok
         ? `✅ <b>¡Genial! Candidatura #${n} marcada como Applied.</b>\nSeguimiento programado a los 7 y 14 días.`
-        : `No pude actualizar el tracker: ${esc((r.stderr || r.stdout).slice(0, 300))}`);
+        : `No pude actualizar el tracker: ${esc(r.error.slice(0, 300))}`);
     }
 
     const matchCv = replyText.match(/CV (?:adaptado|actualizado)/i) || replyText.match(/\bcv\b/i);
@@ -230,11 +236,10 @@ async function handle(msg) {
   if (standaloneAppliedMatch) {
     const n = standaloneAppliedMatch[1];
     setAppState(n, 'applied_manual');
-    const r = spawnSync('node', ['set-status.mjs', '--report', n, 'Applied', '--note', 'Enviada por Jorge (confirmado en Telegram)'], { cwd: ROOT, encoding: 'utf8' });
-    spawnSync('node', ['followup-seed.mjs', n], { cwd: ROOT, encoding: 'utf8' });
-    return tgSend(cfg.token, chatId, r.status === 0
+    const r = setStatusAndSeed(ROOT, n, 'Enviada por Jorge (confirmado en Telegram)');
+    return tgSend(cfg.token, chatId, r.ok
       ? `✅ <b>Candidatura #${n} marcada como Applied.</b>\nSeguimiento programado automáticamente para dentro de 7 y 14 días.`
-      : `No pude actualizar el tracker: ${esc((r.stderr || r.stdout).slice(0, 300))}`);
+      : `No pude actualizar el tracker: ${esc(r.error.slice(0, 300))}`);
   }
 
   switch (cmd) {
@@ -297,9 +302,8 @@ async function handle(msg) {
       const n = text.split(/\s+/)[1];
       if (!/^\d+$/.test(n || '')) return tgSend(cfg.token, chatId, 'Uso: /enviada <nº informe>');
       setAppState(n, 'applied_manual');
-      const r = spawnSync('node', ['set-status.mjs', '--report', n, 'Applied', '--note', 'Enviada por Jorge (confirmado en Telegram)'], { cwd: ROOT, encoding: 'utf8' });
-      spawnSync('node', ['followup-seed.mjs', n], { cwd: ROOT, encoding: 'utf8' });
-      return tgSend(cfg.token, chatId, r.status === 0 ? `✅ Informe #${n} marcado como Applied. Seguimiento programado a los 7 y 14 días.` : `No pude actualizar el tracker: ${esc((r.stderr || r.stdout).slice(0, 300))}`);
+      const r = setStatusAndSeed(ROOT, n, 'Enviada por Jorge (confirmado en Telegram)');
+      return tgSend(cfg.token, chatId, r.ok ? `✅ Informe #${n} marcado como Applied. Seguimiento programado a los 7 y 14 días.` : `No pude actualizar el tracker: ${esc(r.error.slice(0, 300))}`);
     }
     case '/enviar': {
       const n = text.split(/\s+/)[1];
@@ -354,9 +358,11 @@ async function handle(msg) {
       const parts = text.split(/\s+/);
       const n = parts[1];
       const note = parts.slice(2).join(' ').trim();
-      if (!/^\d+$/.test(n || '')) return tgSend(cfg.token, chatId, 'Uso: <code>/contactado &lt;nº informe&gt; [nota]</code>\nEjemplo: <code>/contactado 104 Mensaje a recruiter por LinkedIn</code>');
-      const ok = recordFollowupDone(ROOT, n, note);
-      return tgSend(cfg.token, chatId, ok ? `✅ Registrado seguimiento para el informe #${n}.` : `No pude actualizar el seguimiento para el informe #${n}.`);
+      if (!/^\d+$/.test(n || '')) return tgSend(cfg.token, chatId, 'Uso: <code>/contactado &lt;nº candidatura&gt; [nota]</code>\nEjemplo: <code>/contactado 120 Mensaje a recruiter por LinkedIn</code>');
+      const res = recordFollowupDone(ROOT, n, note);
+      return tgSend(cfg.token, chatId, res.ok
+        ? `✅ Registrado seguimiento para #${res.row.num} (${esc(res.row.company)}).`
+        : `No pude actualizar el seguimiento para #${n}: ${esc(res.error.slice(0, 200))}`);
     }
     case '/carta': {
       const parts = text.split(/\s+/);
@@ -635,27 +641,38 @@ async function handleCallback(cb) {
     setAppState(report, 'manual_pending');
     return tgSend(cfg.token, chatId, `👍 Informe #${report}: la envías tú. Cuando la hayas enviado escribe <code>/enviada ${report}</code> y la marco como Applied.`);
   }
+  const isFollowupMsg = /Recordatorio de seguimiento|Seguimiento final/i.test(cb.message?.text || '');
   if (action === 'followup_done') {
-    const ok = recordFollowupDone(ROOT, report);
-    return tgSend(cfg.token, chatId, ok ? `✅ Registrado seguimiento para el informe #${report}. ¡Buen trabajo!` : `No pude registrar el seguimiento para #${report}.`);
+    const res = recordFollowupDone(ROOT, report, '', { byRowOnly: true });
+    return tgSend(cfg.token, chatId, res.ok
+      ? `✅ Registrado seguimiento para #${res.row.num} (${esc(res.row.company)}). ¡Buen trabajo!`
+      : `No pude registrar el seguimiento para #${report}: ${esc(res.error.slice(0, 200))}`);
   }
   if (action === 'responded') {
-    const r = spawnSync('node', ['set-status.mjs', '--report', report, 'Responded', '--note', 'Respuesta de la empresa confirmada en Telegram'], { cwd: ROOT, encoding: 'utf8' });
-    return tgSend(cfg.token, chatId, r.status === 0 ? `🎉 ¡Excelente! Informe #${report} marcado como <b>Responded</b>.` : `No pude actualizar el tracker: ${esc((r.stderr || r.stdout).slice(0, 200))}`);
+    const row = findTrackerRow(ROOT, report);
+    const r = setTrackerStatus(ROOT, { row: report }, 'Responded', { note: 'Respuesta de la empresa confirmada en Telegram' });
+    return tgSend(cfg.token, chatId, r.ok
+      ? `🎉 ¡Excelente! Candidatura #${report}${row?.company ? ` (${esc(row.company)})` : ''} marcada como <b>Responded</b>.`
+      : `No pude actualizar el tracker: ${esc(r.error.slice(0, 200))}`);
   }
   if (action === 'mark_applied') {
     setAppState(report, 'applied_manual');
-    const r = spawnSync('node', ['set-status.mjs', '--report', report, 'Applied', '--note', 'Ya aplicada por Jorge (confirmado en Telegram)'], { cwd: ROOT, encoding: 'utf8' });
     // count 7/14 days from today, not from the evaluation date (the tracker's default)
-    spawnSync('node', ['followup-seed.mjs', report, '--date', new Date().toISOString().slice(0, 10), '--force'], { cwd: ROOT, encoding: 'utf8' });
-    return tgSend(cfg.token, chatId, r.status === 0
+    const r = setStatusAndSeed(ROOT, report, 'Ya aplicada por Jorge (confirmado en Telegram)', { forceToday: true });
+    return tgSend(cfg.token, chatId, r.ok
       ? `✅ <b>Candidatura #${report} marcada como Applied.</b>\nSi no responden, te aviso a los 7 y 14 días para hacer seguimiento por LinkedIn.`
-      : `No pude actualizar el tracker: ${esc((r.stderr || r.stdout).slice(0, 300))}`);
+      : `No pude actualizar el tracker: ${esc(r.error.slice(0, 300))}`);
+  }
+  if (action === 'discard_row' || (action === 'discard' && isFollowupMsg)) {
+    const row = findTrackerRow(ROOT, report);
+    const r = setTrackerStatus(ROOT, { row: report }, 'Discarded', { note: 'Descartada desde Telegram' });
+    if (row?.reportNum) setAppState(row.reportNum, 'discarded');
+    return tgSend(cfg.token, chatId, `❌ Candidatura #${report}${row?.company ? ` (${esc(row.company)})` : ''} descartada.${r.ok ? '' : ' (no pude actualizar el tracker: ' + esc(r.error.slice(0, 200)) + ')'}`);
   }
   if (action === 'discard') {
     setAppState(report, 'discarded');
-    const r = spawnSync('node', ['set-status.mjs', '--report', report, 'Discarded', '--note', 'Descartada desde Telegram'], { cwd: ROOT, encoding: 'utf8' });
-    return tgSend(cfg.token, chatId, `❌ Informe #${report} descartado.${r.status === 0 ? '' : ' (no pude actualizar el tracker: ' + esc((r.stderr || r.stdout).slice(0, 200)) + ')'}`);
+    const r = setTrackerStatus(ROOT, { report }, 'Discarded', { note: 'Descartada desde Telegram' });
+    return tgSend(cfg.token, chatId, `❌ Informe #${report} descartado.${r.ok ? '' : ' (no pude actualizar el tracker: ' + esc(r.error.slice(0, 200)) + ')'}`);
   }
 }
 
