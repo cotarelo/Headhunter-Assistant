@@ -207,7 +207,7 @@ async function sendTelegramAlerts(hits) {
 // ---------- application pack (CV + cover letter) for n8n/Nod auto-apply ----------
 // Offers scoring >= PACK_THRESHOLD (and with no hard stops) carry, inside the alert email itself, the tailored CV,
 // the cover letter (PDF + txt) and <N>_application.json, so Nod/n8n can apply. Subject is prefixed with PACK_SUBJECT_TAG.
-const PACK_THRESHOLD = Number(process.env.AUTO_PACK_THRESHOLD || 4.7);
+const PACK_THRESHOLD = Number(process.env.AUTO_PACK_THRESHOLD || 4.5);
 const PACK_SUBJECT_TAG = process.env.PACK_SUBJECT_TAG || '[HH-APPLY]';
 const PACK_MAX_ATTEMPTS = 3;
 const reportNum = (file) => ((file.match(/^(\d+)-/) || [])[1] || '').replace(/^0+/, '');
